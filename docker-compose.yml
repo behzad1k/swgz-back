@@ -1,0 +1,50 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: slsk-music-db
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: slsk_music
+      MYSQL_USER: slskuser
+      MYSQL_PASSWORD: slskpass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - slsk-network
+
+  api:
+    build: .
+    container_name: slsk-music-api
+    depends_on:
+      - mysql
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: slskuser
+      DB_PASSWORD: slskpass
+      DB_DATABASE: slsk_music
+      JWT_SECRET: your-production-secret-change-this
+      SLDL_CONFIG_PATH: /config/sldl.conf
+      DOWNLOAD_DIR: /downloads
+    volumes:
+      - ./downloads:/downloads
+      - ./config:/config
+    networks:
+      - slsk-network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+
+networks:
+  slsk-network:
+    driver: bridge
