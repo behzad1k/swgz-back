@@ -7,7 +7,15 @@ export const EXTERNAL_MAPPINGS = {
       artistName: (data: any) => typeof data.artist == 'string' ? data.artist : data.artist.name,
       albumName: 'albumName',
       albumCover: 'albumCover',
+      mbid: 'mbid',
       duration: 'duration',
+    },
+    artist: {
+      name: 'name',
+      externalListens: 'listeners',
+      mbid: 'mbid',
+      image: 'image',
+      lastFMLink: 'url',
     }
   },
   discogs: {

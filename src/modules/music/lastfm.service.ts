@@ -20,18 +20,20 @@ export class LastfmService {
     ))
     fetchResult.map((data, index) => {
       const coverRegex = /<meta[^>]*(?:property|name)=["'](og:)(image)["'][^>]*content=["']([^"']+)["'][^>]*>/gi.exec(data.data);
-      const albumNameRegex = (/<a[^>]*class="link-block-target"[^>]*>([^<]+)<\/a>/gi).exec(data.data);
-      const durationRegex = (/<dd[^>]*class="catalogue-metadata-description"[^>]*>([^<]+)<\/dd>/gi).exec(data.data);
-      if (coverRegex && coverRegex[3]) result[index]['albumCover'] = coverRegex[3]
-      if (albumNameRegex && albumNameRegex[1]) result[index]['albumName'] = albumNameRegex[1]
-      if (durationRegex && durationRegex[1]) {
-        const duration = durationRegex[1].trim().split(':')
-        let finalDuration = parseInt(duration[duration.length - 2].substring(duration[duration.length - 2].length -2)) * 60 + parseInt(duration[duration.length -1])
-        if (duration.length > 2){
-          finalDuration = finalDuration + (parseInt(duration[0]) * 3600)
+      if (filter == SEARCH_FILTERS.track) {
+        const albumNameRegex = (/<a[^>]*class="link-block-target"[^>]*>([^<]+)<\/a>/gi).exec(data.data);
+        const durationRegex = (/<dd[^>]*class="catalogue-metadata-description"[^>]*>([^<]+)<\/dd>/gi).exec(data.data);
+        if (albumNameRegex && albumNameRegex[1]) result[index]['albumName'] = albumNameRegex[1];
+        if (durationRegex && durationRegex[1]) {
+          const duration = durationRegex[1].trim().split(':');
+          let finalDuration = parseInt(duration[duration.length - 2].substring(duration[duration.length - 2].length - 2)) * 60 + parseInt(duration[duration.length - 1]);
+          if (duration.length > 2) {
+            finalDuration = finalDuration + (parseInt(duration[0]) * 3600);
+          }
+          result[index]['duration'] = finalDuration;
         }
-        result[index]['duration'] = finalDuration;
       }
+      if (coverRegex && coverRegex[3]) result[index][key] = coverRegex[3];
       result[index] = applyMapping<Track>(result[index], EXTERNAL_MAPPINGS.lastFM[filter]);
     })
     return result
@@ -48,7 +50,7 @@ export class LastfmService {
 
   async artistSearch(query: string, limit = 10): Promise<LastFM.Artist[]> {
     const result = await this.search(query, SEARCH_FILTERS.artist, limit)
-    return this.formatResult(result.artistmatches.artist, SEARCH_FILTERS.artist);
+    return this.formatResult(result.artistmatches.artist, SEARCH_FILTERS.artist, 'image');
   }
 
   private async search(query: string, filter: SearchFilter, limit: number) {
