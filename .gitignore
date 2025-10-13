@@ -37,7 +37,7 @@ lerna-debug.log*
 downloads/
 
 # Config
-config/sldl.conf
+sldl.conf
 
 # Database
 *.sql
