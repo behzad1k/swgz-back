@@ -25,14 +25,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install and Build
-        working-directory: ./frontend
-        run: |
-          cd /home/swgz-back
-          git pull origin main
-          npm ci --only=production
-          npm run build
-
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -41,5 +33,9 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
           script: |
+            cd /home/swgz-back
+            git pull origin main
+            npm ci --only=production
+            npm run build
             npm run migration:run
             sudo systemctl restart swgz-back
