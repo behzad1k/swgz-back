@@ -18,7 +18,7 @@ export class EmailService {
   }
 
   async sendConfirmationEmail(email: string, token: string) {
-    const confirmUrl = `${process.env.APP_URL}/confirm-email?token=${token}`;
+    const confirmUrl = `${process.env.APP_URL}/email-confirm?token=${token}`;
 
     await this.transporter.sendMail({
       from: process.env.SMTP_FROM || 'noreply@swgz.com',
