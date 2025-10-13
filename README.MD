@@ -1,6 +1,5 @@
-# slsk-batchdl API Wrapper
-
-A comprehensive REST API wrapper for [slsk-batchdl](https://github.com/fiso64/slsk-batchdl), providing easy HTTP access to all Soulseek batch download functionality.
+# swgz Nestjs Backend
+The backend for swgz streaming service
 
 ## Prerequisites
 
