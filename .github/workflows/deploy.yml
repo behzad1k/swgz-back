@@ -10,12 +10,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Debug Secrets
         run: |
           echo "Host configured: ${{ secrets.SERVER_HOST != '' }}"
           echo "User configured: ${{ secrets.SERVER_USER != '' }}"
           echo "Key configured: ${{ secrets.SERVER_SSH_KEY != '' }}"
           echo "Key starts with: $(echo '${{ secrets.SERVER_SSH_KEY }}' | head -c 30)"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install and Build
+        working-directory: ./frontend
+        run: |
+          cd /home/swgz-back
+          git pull origin main
+          npm ci --only=production
+          npm run build
 
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
@@ -25,9 +41,5 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: 22
           script: |
-            cd /home/swgz-back
-            git pull origin main
-            npm ci --only=production
-            npm run build
             npm run migration:run
             sudo systemctl restart swgz-back
