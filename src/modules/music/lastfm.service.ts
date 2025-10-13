@@ -15,7 +15,7 @@ export class LastfmService {
     try {
       const fetchResult = await Promise.all(result.map(obj =>
         axios.get(obj.url, {
-          timeout: 5000,
+          timeout: 100000,
           maxRedirects: 3,
           headers: { 'User-Agent': 'Mozilla/5.0' } // Some sites require this
         })
