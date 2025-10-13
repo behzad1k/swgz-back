@@ -1,4 +1,4 @@
-name: Deploy swgz Backend
+name: Deploy Backend
 
 on:
   push:
@@ -6,28 +6,33 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to Server
+    name: Build and Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install SSH Key
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SERVER_SSH_KEY }}" | base64 -d > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.SERVER_HOST }} > ~/.ssh/known_hosts
+          npm ci
+          npm run build
 
       - name: Deploy to Server
-        run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
             cd /home/swgz-back
-            git pull origin main
+            git pull
             npm ci --only=production
             npm run build
             npm run migration:run
-            sudo systemctl restart swgz-back
-          ENDSSH
-
-      - name: Cleanup
-        if: always()
-        run: rm -rf ~/.ssh
+            pm2 restart your-pm2-app-name
