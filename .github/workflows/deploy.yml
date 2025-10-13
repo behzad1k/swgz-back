@@ -33,6 +33,7 @@ jobs:
             cd /home/swgz-back
             git pull
             npm ci --only=production
+            rm -rf dist
             npm run build
             sudo systemctl restart swgz-back
-            echo "Checking service status..."
+            sudo systemctl status swgz-back --no-pager
