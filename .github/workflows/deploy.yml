@@ -55,8 +55,8 @@ jobs:
           script: |
             cd /home/swgz-back
             git pull
-            npm ci --only=production
+            npm ci
             rm -rf dist
-            npx nest build
+            npm run build
             sudo systemctl restart swgz-back
             sudo systemctl status swgz-back --no-pager
