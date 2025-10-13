@@ -1,6 +1,7 @@
-import { forwardRef, Inject, Injectable } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Like, Repository } from 'typeorm';
+import { applyMapping, EXTERNAL_MAPPINGS } from '../../config/mapping.config';
 import { SearchFilter } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
 import { LibraryService } from '../library/library.service';
@@ -9,6 +10,7 @@ import { User } from '../users/entities/user.entity';
 import { DiscogsService } from './discogs.service';
 import { PlaySongDto } from './dto/music.dto';
 import { PlayHistory } from '../library/entities/play-history.entity';
+import { Artist } from './entities/artist.entity';
 import { SearchHistory } from './entities/search-history.entity';
 import { Song } from './entities/song.entity';
 import { LastfmService } from './lastfm.service';
@@ -19,6 +21,8 @@ export class MusicService {
   constructor(
     @InjectRepository(Song)
     private songRepository: Repository<Song>,
+    @InjectRepository(Artist)
+    private artistRepository: Repository<Artist>,
     @InjectRepository(SearchHistory)
     private searchHistoryRepository: Repository<SearchHistory>,
     @Inject(forwardRef(() => LibraryService))
@@ -57,8 +61,18 @@ export class MusicService {
 
         return [...cachedResult, ...formattedResult].map(e => { const { id: _, ...newObj } = e; return newObj}).sort((a, b) => b.externalListens - a.externalListens);
       case 'artist':
-        // cachedResult = await this.songRepository.find({ where: { title: Like(`%${query}%`)}, order: { externalListens: 'DESC' }, take: 10 })
-        return await this.lastFMService.artistSearch(query);
+        cachedResult = await this.artistRepository.find({ where: { name: Like(`%${query}%`)}, order: { externalListeners: 'DESC' } })
+
+        newResult = await this.lastFMService.artistSearch(query, 20);
+        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult.filter(e => e.mbid)), SEARCH_FILTERS.artist, 'image')
+
+        try{
+          await this.artistRepository.save(formattedResult)
+        }
+        catch(err){
+          console.error(err);
+        }
+        return [...cachedResult, ...formattedResult].sort((a, b) => b.externalListeners - a.externalListeners);
       case 'album':
         return await this.lastFMService.albumSearch(query);
       default:
@@ -140,5 +154,27 @@ export class MusicService {
     }
 
     return relatedSongs;
+  }
+
+  async fetchArtistInfo(artistId: string): Promise<Artist>{
+    let artist
+    try {
+      artist = await this.artistRepository.findOne({ where: { id: artistId } });
+    } catch (e){
+      throw new NotFoundException('Artist Not Found')
+    }
+    if (!artist?.bio) {
+      const artistDetail = await this.lastFMService.getArtistData(artist);
+      const formattedArtist = {
+        id: artist.id,
+        image: artist.image,
+        ...(applyMapping({ ...artist, ...artistDetail }, EXTERNAL_MAPPINGS.lastFM.artist) as any)
+      }
+      artist = await this.artistRepository.save(formattedArtist);
+    }
+
+    // TODO: similar artists
+
+    return artist;
   }
 }

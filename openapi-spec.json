@@ -258,6 +258,36 @@
         ]
       }
     },
+    "/music/artist/{id}": {
+      "get": {
+        "operationId": "MusicController_getArtist",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artist"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Music"
+        ]
+      }
+    },
     "/music/check-flac/{id}": {
       "get": {
         "operationId": "MusicController_checkFlacAvailability",
@@ -1881,11 +1911,20 @@
           "lastFMLink": {
             "type": "string"
           },
-          "externalListens": {
+          "externalListeners": {
+            "type": "number"
+          },
+          "externalPlays": {
             "type": "number"
           },
           "mbid": {
-            "type": "number"
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "fullBio": {
+            "type": "string"
           },
           "songs": {
             "type": "array",

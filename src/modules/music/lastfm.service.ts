@@ -3,6 +3,7 @@ import axios from 'axios';
 import { applyMapping, EXTERNAL_MAPPINGS } from '../../config/mapping.config';
 import { SearchFilter } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
+import { Artist } from './entities/artist.entity';
 import { Song } from './entities/song.entity';
 import Track = LastFM.Track;
 
@@ -48,9 +49,9 @@ export class LastfmService {
     return result.albummatches.album;
   }
 
-  async artistSearch(query: string, limit = 10): Promise<LastFM.Artist[]> {
+  async artistSearch(query: string, limit = 30): Promise<LastFM.Artist[]> {
     const result = await this.search(query, SEARCH_FILTERS.artist, limit)
-    return this.formatResult(result.artistmatches.artist, SEARCH_FILTERS.artist, 'image');
+    return result.artistmatches.artist;
   }
 
   private async search(query: string, filter: SearchFilter, limit: number) {
@@ -70,6 +71,18 @@ export class LastfmService {
     } catch (error) {
       return [];
     }
+  }
+
+  async getArtistData(artist: Artist): Promise<Artist> {
+    const params: any = {
+      method: 'artist.getinfo',
+      api_key: this.lastFmApiKey,
+      format: 'json',
+      artist: artist.name,
+    }
+    if (artist.mbid)  params.mbid = artist.mbid
+    const response = await axios.get('http://ws.audioscrobbler.com/2.0/', { params })
+    return response.data.artist
   }
 
   async getSimilarTracks(song: Song, limit = 5): Promise<Song[]> {
@@ -99,6 +112,17 @@ export class LastfmService {
       return !cachedLinks.has(externalTrack.url)
         && !cachedMBIDs.has(externalTrack.mbid)
         && !cachedKeys.has(key);
+    });
+  }
+  removeCachedDuplicateArtists(cachedArray: Artist[], array2: any[]) {
+    const cachedLinks = new Set(cachedArray.map(t => t.lastFMLink));
+    const cachedMBIDs = new Set(cachedArray.map(t => t.mbid));
+    const cachedNames = new Set(cachedArray.map(t => t.name));
+
+    return array2.filter((externalArtist) => {
+      return !cachedLinks.has(externalArtist.url)
+        && !cachedMBIDs.has(externalArtist.mbid)
+        && !cachedNames.has(externalArtist.name);
     });
   }
 }

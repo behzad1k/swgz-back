@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Param, UseGuards, Body, Res } from '@nestjs/common';
+import { Controller, Get, Post, Query, Param, UseGuards, Body, Res, NotFoundException } from '@nestjs/common';
 import { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { SearchFilter } from '../../types';
@@ -53,6 +53,12 @@ export class MusicController {
   @Get('similar-tracks/:id')
   async getSimilarTracks(@Param('id') songId: string) {
     return this.musicService.getSimilarTracks(songId);
+  }
+
+  @Get('artist/:id')
+  async getArtist(@Param('id') artistId: string) {
+    if (!artistId) throw new NotFoundException("Artist not found");
+    return this.musicService.fetchArtistInfo(artistId);
   }
 
   @Get('check-flac/:id')

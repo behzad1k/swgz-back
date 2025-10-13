@@ -12,10 +12,12 @@ export const EXTERNAL_MAPPINGS = {
     },
     artist: {
       name: 'name',
-      externalListens: 'listeners',
       mbid: 'mbid',
-      image: 'image',
       lastFMLink: 'url',
+      externalListeners: (data: any)=> data.stats.listeners,
+      externalPlays: (data: any)=> data.stats.playcount,
+      bio: (data: any)=> data.bio.summary,
+      fullBio: (data: any)=> data.bio.content,
     }
   },
   discogs: {

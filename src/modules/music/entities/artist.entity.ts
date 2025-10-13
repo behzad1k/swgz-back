@@ -19,10 +19,19 @@ export class Artist {
   lastFMLink?: string;
 
   @Column({ nullable: true })
-  externalListens?: number;
+  externalListeners?: number;
 
   @Column({ nullable: true })
-  mbid?: number;
+  externalPlays?: number;
+
+  @Column({ nullable: true })
+  mbid?: string;
+
+  @Column({ nullable: true, type: 'longtext' })
+  bio?: string;
+
+  @Column({ nullable: true, type: 'longtext'})
+  fullBio?: string;
 
   @OneToMany(() => Song, song => song.artist)
   songs: Song[];
