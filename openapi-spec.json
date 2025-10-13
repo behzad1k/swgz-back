@@ -73,6 +73,27 @@
         ]
       }
     },
+    "/auth/user": {
+      "get": {
+        "operationId": "AuthController_getUser",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/auth/google": {
       "get": {
         "operationId": "AuthController_googleAuth",
@@ -1733,36 +1754,6 @@
           "password"
         ]
       },
-      "PlaySongDto": {
-        "type": "object",
-        "properties": {
-          "title": {
-            "type": "string"
-          },
-          "artistName": {
-            "type": "string"
-          },
-          "albumName": {
-            "type": "string"
-          },
-          "albumCover": {
-            "type": "string"
-          },
-          "lastFMLink": {
-            "type": "string"
-          },
-          "duration": {
-            "type": "number"
-          },
-          "mbid": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "title",
-          "artistName"
-        ]
-      },
       "PlaylistSong": {
         "type": "object",
         "properties": {
@@ -1799,72 +1790,7 @@
           "addedAt"
         ]
       },
-      "Playlist": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "source": {
-            "enum": [
-              "user",
-              "spotify",
-              "youtube"
-            ],
-            "type": "string"
-          },
-          "externalId": {
-            "type": "string"
-          },
-          "coverImage": {
-            "type": "string"
-          },
-          "isEditable": {
-            "type": "boolean"
-          },
-          "user": {
-            "$ref": "#/components/schemas/User"
-          },
-          "userId": {
-            "type": "string"
-          },
-          "songs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlaylistSong"
-            }
-          },
-          "createdAt": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "updatedAt": {
-            "format": "date-time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "description",
-          "source",
-          "externalId",
-          "coverImage",
-          "isEditable",
-          "user",
-          "userId",
-          "songs",
-          "createdAt",
-          "updatedAt"
-        ]
-      },
-      "SearchHistory": {
+      "PlayHistory": {
         "type": "object",
         "properties": {
           "id": {
@@ -1876,13 +1802,13 @@
           "userId": {
             "type": "string"
           },
-          "query": {
+          "song": {
+            "$ref": "#/components/schemas/Song"
+          },
+          "songId": {
             "type": "string"
           },
-          "filter": {
-            "type": "string"
-          },
-          "searchedAt": {
+          "playedAt": {
             "format": "date-time",
             "type": "string"
           }
@@ -1891,9 +1817,9 @@
           "id",
           "user",
           "userId",
-          "query",
-          "filter",
-          "searchedAt"
+          "song",
+          "songId",
+          "playedAt"
         ]
       },
       "Artist": {
@@ -2082,7 +2008,7 @@
           "updatedAt"
         ]
       },
-      "PlayHistory": {
+      "LibrarySong": {
         "type": "object",
         "properties": {
           "id": {
@@ -2100,7 +2026,13 @@
           "songId": {
             "type": "string"
           },
-          "playedAt": {
+          "isLiked": {
+            "type": "boolean"
+          },
+          "isDownloaded": {
+            "type": "boolean"
+          },
+          "addedAt": {
             "format": "date-time",
             "type": "string"
           }
@@ -2111,7 +2043,41 @@
           "userId",
           "song",
           "songId",
-          "playedAt"
+          "isLiked",
+          "isDownloaded",
+          "addedAt"
+        ]
+      },
+      "SearchHistory": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "filter": {
+            "type": "string"
+          },
+          "searchedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user",
+          "userId",
+          "query",
+          "filter",
+          "searchedAt"
         ]
       },
       "User": {
@@ -2232,11 +2198,34 @@
           "updatedAt"
         ]
       },
-      "LibrarySong": {
+      "Playlist": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "user",
+              "spotify",
+              "youtube"
+            ],
+            "type": "string"
+          },
+          "externalId": {
+            "type": "string"
+          },
+          "coverImage": {
+            "type": "string"
+          },
+          "isEditable": {
+            "type": "boolean"
           },
           "user": {
             "$ref": "#/components/schemas/User"
@@ -2244,32 +2233,64 @@
           "userId": {
             "type": "string"
           },
-          "song": {
-            "$ref": "#/components/schemas/Song"
+          "songs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaylistSong"
+            }
           },
-          "songId": {
+          "createdAt": {
+            "format": "date-time",
             "type": "string"
           },
-          "isLiked": {
-            "type": "boolean"
-          },
-          "isDownloaded": {
-            "type": "boolean"
-          },
-          "addedAt": {
+          "updatedAt": {
             "format": "date-time",
             "type": "string"
           }
         },
         "required": [
           "id",
+          "name",
+          "description",
+          "source",
+          "externalId",
+          "coverImage",
+          "isEditable",
           "user",
           "userId",
-          "song",
-          "songId",
-          "isLiked",
-          "isDownloaded",
-          "addedAt"
+          "songs",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PlaySongDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "artistName": {
+            "type": "string"
+          },
+          "albumName": {
+            "type": "string"
+          },
+          "albumCover": {
+            "type": "string"
+          },
+          "lastFMLink": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number"
+          },
+          "mbid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "artistName"
         ]
       },
       "AddToLibraryDto": {

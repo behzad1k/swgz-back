@@ -86,6 +86,11 @@ export class AuthService {
     };
   }
 
+  async getUser(user: User){
+
+    return this.userRepository.findOneOrFail({ where: { id: user.id } });
+  }
+
   async googleLogin(profile: any) {
     let user = await this.userRepository.findOne({ where: { googleId: profile.id } });
 
