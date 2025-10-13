@@ -31,7 +31,7 @@ async function bootstrap() {
   .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document);
+  SwaggerModule.setup('swagger/', app, document);
   fs.writeFileSync('./openapi-spec.json', JSON.stringify(document, null, 2));
 
   const port = process.env.PORT || 3000;
