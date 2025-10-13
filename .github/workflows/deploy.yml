@@ -6,23 +6,10 @@ on:
 
 jobs:
   deploy:
-    name: Build and Deploy
-    runs-on: alma-latest
+    name: Deploy to Server
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Build
-        run: |
-          npm ci
-          npm run build
-
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -31,7 +18,8 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             cd /home/swgz-back
-            git pull
+            git pull origin main
             npm ci --only=production
             npm run build
-            systemctl restart swgz-back
+            npm run migration:run
+            sudo systemctl restart swgz-back
