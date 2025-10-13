@@ -34,5 +34,4 @@ jobs:
             git pull
             npm ci --only=production
             npm run build
-            npm run migration:run
             sudo systemctl restart swgz-back
