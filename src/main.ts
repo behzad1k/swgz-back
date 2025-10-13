@@ -9,7 +9,7 @@ async function bootstrap() {
   app.enableCors({
     allowedHeaders: '*',
     origin: '*',
-    credentials: true,
+    credentials: false,
   });
   // app.setGlobalPrefix('api');
   app.useGlobalPipes(
