@@ -35,4 +35,4 @@ jobs:
             npm ci --only=production
             npm run build
             npm run migration:run
-            pm2 restart your-pm2-app-name
+            sudo systemctl restart swgz-back
