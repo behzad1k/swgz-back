@@ -12,17 +12,14 @@ jobs:
     steps:
       - name: Install SSH Key
         run: |
-          install -m 600 -D /dev/null ~/.ssh/id_rsa
-          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} > ~/.ssh/known_hosts
-
-      - name: Test SSH Connection
-        run: |
-          ssh -vvv ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "echo 'SSH connection works!'"
 
       - name: Deploy to Server
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
             cd /home/swgz-back
             git pull origin main
             npm ci --only=production
