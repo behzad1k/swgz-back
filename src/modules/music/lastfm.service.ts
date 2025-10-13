@@ -12,31 +12,35 @@ export class LastfmService {
   private lastFmApiKey = process.env.LASTFM_API_KEY;
 
   async formatResult(result: any, filter: SEARCH_FILTERS, key: string = 'albumCover'): Promise<any> {
-    const fetchResult = await Promise.all(result.map(obj =>
-      axios.get(obj.url, {
-        timeout: 5000,
-        maxRedirects: 3,
-        headers: { 'User-Agent': 'Mozilla/5.0' } // Some sites require this
-      })
-    ))
-    fetchResult.map((data, index) => {
-      const coverRegex = /<meta[^>]*(?:property|name)=["'](og:)(image)["'][^>]*content=["']([^"']+)["'][^>]*>/gi.exec(data.data);
-      if (filter == SEARCH_FILTERS.track) {
-        const albumNameRegex = (/<a[^>]*class="link-block-target"[^>]*>([^<]+)<\/a>/gi).exec(data.data);
-        const durationRegex = (/<dd[^>]*class="catalogue-metadata-description"[^>]*>([^<]+)<\/dd>/gi).exec(data.data);
-        if (albumNameRegex && albumNameRegex[1]) result[index]['albumName'] = albumNameRegex[1];
-        if (durationRegex && durationRegex[1]) {
-          const duration = durationRegex[1].trim().split(':');
-          let finalDuration = parseInt(duration[duration.length - 2].substring(duration[duration.length - 2].length - 2)) * 60 + parseInt(duration[duration.length - 1]);
-          if (duration.length > 2) {
-            finalDuration = finalDuration + (parseInt(duration[0]) * 3600);
+    try {
+      const fetchResult = await Promise.all(result.map(obj =>
+        axios.get(obj.url, {
+          timeout: 5000,
+          maxRedirects: 3,
+          headers: { 'User-Agent': 'Mozilla/5.0' } // Some sites require this
+        })
+      ));
+      fetchResult.map((data, index) => {
+        const coverRegex = /<meta[^>]*(?:property|name)=["'](og:)(image)["'][^>]*content=["']([^"']+)["'][^>]*>/gi.exec(data.data);
+        if (filter == SEARCH_FILTERS.track) {
+          const albumNameRegex = (/<a[^>]*class="link-block-target"[^>]*>([^<]+)<\/a>/gi).exec(data.data);
+          const durationRegex = (/<dd[^>]*class="catalogue-metadata-description"[^>]*>([^<]+)<\/dd>/gi).exec(data.data);
+          if (albumNameRegex && albumNameRegex[1]) result[index]['albumName'] = albumNameRegex[1];
+          if (durationRegex && durationRegex[1]) {
+            const duration = durationRegex[1].trim().split(':');
+            let finalDuration = parseInt(duration[duration.length - 2].substring(duration[duration.length - 2].length - 2)) * 60 + parseInt(duration[duration.length - 1]);
+            if (duration.length > 2) {
+              finalDuration = finalDuration + (parseInt(duration[0]) * 3600);
+            }
+            result[index]['duration'] = finalDuration;
           }
-          result[index]['duration'] = finalDuration;
         }
-      }
-      if (coverRegex && coverRegex[3]) result[index][key] = coverRegex[3];
-      result[index] = applyMapping<Track>(result[index], EXTERNAL_MAPPINGS.lastFM[filter]);
-    })
+        if (coverRegex && coverRegex[3]) result[index][key] = coverRegex[3];
+        result[index] = applyMapping<Track>(result[index], EXTERNAL_MAPPINGS.lastFM[filter]);
+      });
+    }catch (e){
+      console.log(e);
+    }
     return result
   }
 
