@@ -7,9 +7,12 @@ import * as fs from 'fs';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors({
-    allowedHeaders: '*',
-    origin: '*',
-    credentials: false,
+    origin: true, // Allows all origins
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    credentials: true, // Allow cookies and authentication headers
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
   // app.setGlobalPrefix('api');
   app.useGlobalPipes(
