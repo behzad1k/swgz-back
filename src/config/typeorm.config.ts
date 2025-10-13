@@ -12,7 +12,7 @@ export const typeOrmConfig: TypeOrmModuleOptions = {
   database: process.env.DB_DATABASE || 'slsk_music',
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   synchronize: process.env.NODE_ENV !== 'production',
-  logging: process.env.NODE_ENV === 'development',
+  logging: false,
 };
 
 export const dataSource = new DataSource(typeOrmConfig as DataSourceOptions);

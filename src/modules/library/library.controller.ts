@@ -1,9 +1,11 @@
 // library.controller.ts
 import { Controller, Get, Post, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { SubscriptionGuard } from '../../common/guards/guards';
+import { AddToLibraryDto } from './dto/library.dto';
 import { LibraryService } from './library.service';
-import { CurrentUser } from '../../common/decorators/decorators';
-import { User } from '../users/entities/user.entity';
+import { CurrentUser, RequireSubscription } from '../../common/decorators/decorators';
+import { SubscriptionPlan, User } from '../users/entities/user.entity';
 
 @Controller('library')
 @UseGuards(AuthGuard(['jwt', 'api-key']))
@@ -20,8 +22,18 @@ export class LibraryController {
     return this.libraryService.getLikedSongs(user.id);
   }
 
+  @Get('recently-played')
+  async getRecentlyPlayed(@CurrentUser() user: User) {
+    return this.libraryService.getRecentlyPlayed(user.id);
+  }
+
+  @Get('most-listened')
+  async getMostListened(@CurrentUser() user: User) {
+    return this.libraryService.getMostListened(user.id);
+  }
+
   @Post('add')
-  async addToLibrary(@Body() songData: any, @CurrentUser() user: User) {
+  async addToLibrary(@Body() songData: AddToLibraryDto, @CurrentUser() user: User) {
     return this.libraryService.addToLibrary(user.id, songData, user);
   }
 
@@ -33,5 +45,11 @@ export class LibraryController {
   @Post('like/:songId')
   async toggleLike(@Param('songId') songId: string, @CurrentUser() user: User) {
     return this.libraryService.toggleLike(user.id, songId);
+  }
+
+  @Post('play/:id')
+  async recordPlay(@Param('id') songId: string, @CurrentUser() user: User) {
+    await this.libraryService.recordPlay(songId, user);
+    return { message: 'Play recorded' };
   }
 }

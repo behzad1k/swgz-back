@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { typeOrmConfig } from './config/typeorm.config';
 import { AuthModule } from './modules/auth/auth.module';
+import { CronModule } from './modules/cronjob/cronjob.module';
 import { UsersModule } from './modules/users/users.module';
 import { MusicModule } from './modules/music/music.module';
 import { PlaylistModule } from './modules/playlist/playlist.module';
@@ -35,6 +36,7 @@ import { SwagzModule } from './modules/swagz/swagz.module';
     SocialModule,
     ProfileModule,
     SwagzModule,
+    CronModule,
   ],
 })
 export class AppModule {}

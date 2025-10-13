@@ -7,6 +7,9 @@ export class SignUpDto {
   @IsString()
   @MinLength(8)
   password: string;
+
+  @IsString()
+  username: string;
 }
 
 export class LoginDto {
@@ -15,4 +18,9 @@ export class LoginDto {
 
   @IsString()
   password: string;
+}
+
+export class ConfirmEmailDto {
+  @IsString()
+  token: string;
 }

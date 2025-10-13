@@ -3,7 +3,7 @@ import { Exclude } from 'class-transformer';
 import { Playlist } from '../../playlist/entities/playlist.entity';
 import { LibrarySong } from '../../library/entities/library-song.entity';
 import { SearchHistory } from '../../music/entities/search-history.entity';
-import { PlayHistory } from '../../music/entities/play-history.entity';
+import { PlayHistory } from '../../library/entities/play-history.entity';
 
 export enum UserRole {
   USER = 'user',

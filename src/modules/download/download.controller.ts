@@ -1,6 +1,7 @@
 // download.controller.ts
 import { Controller, Post, Get, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { StartDownloadDto } from './dto/download.dto';
 import { DownloadService } from './download.service';
 import { CurrentUser } from '../../common/decorators/decorators';
 import { User } from '../users/entities/user.entity';
@@ -13,7 +14,7 @@ export class DownloadController {
   @Post(':songId')
   async startDownload(
     @Param('songId') songId: string,
-    @Body() body: { preferFlac?: boolean },
+    @Body() body: StartDownloadDto,
     @CurrentUser() user: User,
   ) {
     const jobId = await this.downloadService.startDownload(songId, user, body.preferFlac);

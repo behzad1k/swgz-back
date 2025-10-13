@@ -1,6 +1,7 @@
 // comments.controller.ts
 import { Controller, Get, Post, Put, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { CreateCommentDto, UpdateCommentDto } from './dto/comments.dto';
 import { CommentsService } from './comments.service';
 import { CurrentUser } from '../../common/decorators/decorators';
 import { User } from '../users/entities/user.entity';
@@ -12,7 +13,7 @@ export class CommentsController {
 
   @Post()
   async createComment(
-    @Body() body: { songId: string; content: string; parentCommentId?: string },
+    @Body() body: CreateCommentDto,
     @CurrentUser() user: User,
   ) {
     return this.commentsService.create(body.songId, body.content, user.id, body.parentCommentId);
@@ -35,7 +36,7 @@ export class CommentsController {
   @Put(':id')
   async updateComment(
     @Param('id') id: string,
-    @Body() body: { content: string },
+    @Body() body: UpdateCommentDto,
     @CurrentUser() user: User,
   ) {
     return this.commentsService.update(id, body.content, user.id);

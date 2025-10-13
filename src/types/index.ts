@@ -145,3 +145,12 @@ export interface SearchResult {
   user?: string;
   path?: string;
 }
+
+export interface CronJobConfig {
+  name: string;
+  expression: string;
+  enabled: boolean;
+  description?: string;
+}
+
+export type SearchFilter = 'all' | 'track' | 'artist' | 'album' | 'stalker'

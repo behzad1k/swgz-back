@@ -118,7 +118,7 @@ export class ImportService {
       const track = tracks[i];
       const song = await this.musicService.getOrCreateSong({
         title: track.title,
-        artist: track.artist,
+        artistName: track.artist,
       });
 
       const playlistSong = this.playlistSongRepository.create({

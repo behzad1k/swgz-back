@@ -1,6 +1,7 @@
 // admin.controller.ts
 import { Controller, Get, Put, Delete, Query, Param, Body, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { UpgradeToPremiumDto } from './dto/admin.dto';
 import { AdminService } from './admin.service';
 import { Roles } from '../../common/decorators/decorators';
 import { RolesGuard } from '../../common/guards/guards';
@@ -30,7 +31,7 @@ export class AdminController {
   @Put('users/:id/upgrade')
   async upgradeToPremium(
     @Param('id') id: string,
-    @Body() body: { expiresAt?: string },
+    @Body() body: UpgradeToPremiumDto,
   ) {
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
     return this.adminService.upgradeToPremium(id, expiresAt);

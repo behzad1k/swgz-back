@@ -1,7 +1,7 @@
 import { Controller, Post, Get, Body, Query, UseGuards, Req } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
-import { SignUpDto, LoginDto } from './dto/auth.dto';
+import { SignUpDto, LoginDto, ConfirmEmailDto } from './dto/auth.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -9,12 +9,12 @@ export class AuthController {
 
   @Post('signup')
   async signUp(@Body() signUpDto: SignUpDto) {
-    return this.authService.signUp(signUpDto.email, signUpDto.password);
+    return this.authService.signUp(signUpDto.email, signUpDto.password, signUpDto.username);
   }
 
-  @Get('confirm-email')
-  async confirmEmail(@Query('token') token: string) {
-    return this.authService.confirmEmail(token);
+  @Post('confirm-email')
+  async confirmEmail(@Body() confirmEmailDto: ConfirmEmailDto) {
+    return this.authService.confirmEmail(confirmEmailDto.token);
   }
 
   @Post('login')

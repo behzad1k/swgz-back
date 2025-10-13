@@ -16,7 +16,7 @@ export class AuthService {
     private emailService: EmailService,
   ) {}
 
-  async signUp(email: string, password: string) {
+  async signUp(email: string, password: string, username: string) {
     const existingUser = await this.userRepository.findOne({ where: { email } });
     if (existingUser) {
       throw new BadRequestException('Email already registered');
@@ -29,6 +29,7 @@ export class AuthService {
     const user = this.userRepository.create({
       email,
       password: hashedPassword,
+      username,
       emailConfirmToken,
       apiKey,
       subscriptionPlan: SubscriptionPlan.FREE,
@@ -37,7 +38,7 @@ export class AuthService {
     await this.userRepository.save(user);
     await this.emailService.sendConfirmationEmail(email, emailConfirmToken);
 
-    return { message: 'Registration successful. Please check your email to confirm.' };
+    return { message: 'All good. Check your email' };
   }
 
   async confirmEmail(token: string) {

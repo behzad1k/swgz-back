@@ -1,6 +1,7 @@
 // profile.controller.ts
 import { Controller, Get, Put, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { UpdateProfileDto } from './dto/profile.dto';
 import { ProfileService } from './profile.service';
 import { CurrentUser } from '../../common/decorators/decorators';
 import { User } from '../users/entities/user.entity';
@@ -29,7 +30,7 @@ export class ProfileController {
   @Put('me')
   @UseGuards(AuthGuard(['jwt', 'api-key']))
   async updateMyProfile(
-    @Body() updates: { username?: string; bio?: string; avatarUrl?: string; isPrivate?: boolean },
+    @Body() updates: UpdateProfileDto,
     @CurrentUser() user: User,
   ) {
     return this.profileService.updateProfile(user.id, updates);

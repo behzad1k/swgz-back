@@ -96,7 +96,7 @@ export class DownloadService {
     const outputDir = path.join(process.env.DOWNLOAD_DIR || 'downloads', user.id);
 
     const format = user.subscriptionPlan === SubscriptionPlan.PREMIUM ? 'flac,mp3' : 'mp3';
-    const input = `artist=${song.artist}, title=${song.title}`;
+    const input = `artist=${song.artistName}, title=${song.title}`;
 
     const args = this.slskService.buildDownloadCommand({
       input,

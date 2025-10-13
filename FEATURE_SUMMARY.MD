@@ -177,7 +177,7 @@
 - ✅ Unconfirmed users
 
 ### Default Super Admin
-- Email: `admin@slsk-music.com`
+- Email: `admin@swgz.com`
 - Password: `SuperAdmin@2025`
 - Role: ADMIN
 - Plan: Premium

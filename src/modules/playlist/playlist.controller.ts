@@ -1,6 +1,7 @@
 // playlist.controller.ts
 import { Controller, Get, Post, Put, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { AddSongToPlaylistDto, CreatePlaylistDto, ImportPlaylistDto, UpdatePlaylistDto } from './dto/playlist.dto';
 import { PlaylistService } from './playlist.service';
 import { ImportService } from './import.service';
 import { CurrentUser } from '../../common/decorators/decorators';
@@ -27,14 +28,14 @@ export class PlaylistController {
   }
 
   @Post()
-  async createPlaylist(@Body() body: { name: string; description?: string }, @CurrentUser() user: User) {
+  async createPlaylist(@Body() body: CreatePlaylistDto, @CurrentUser() user: User) {
     return this.playlistService.create(user.id, body.name, body.description, user);
   }
 
   @Put(':id')
   async updatePlaylist(
     @Param('id') id: string,
-    @Body() body: { name?: string; description?: string },
+    @Body() body: UpdatePlaylistDto,
     @CurrentUser() user: User,
   ) {
     return this.playlistService.update(id, body.name, body.description, user.id);
@@ -46,7 +47,7 @@ export class PlaylistController {
   }
 
   @Post(':id/songs')
-  async addSongToPlaylist(@Param('id') id: string, @Body() songData: any, @CurrentUser() user: User) {
+  async addSongToPlaylist(@Param('id') id: string, @Body() songData: AddSongToPlaylistDto, @CurrentUser() user: User) {
     return this.playlistService.addSong(id, songData, user.id);
   }
 
@@ -62,7 +63,7 @@ export class PlaylistController {
   @Post('import/spotify')
   @UseGuards(SubscriptionGuard)
   @RequireSubscription(SubscriptionPlan.PREMIUM)
-  async importFromSpotify(@Body() body: { playlistUrl: string }, @CurrentUser() user: User) {
+  async importFromSpotify(@Body() body: ImportPlaylistDto, @CurrentUser() user: User) {
     return this.importService.importFromSpotify(body.playlistUrl, user);
   }
 

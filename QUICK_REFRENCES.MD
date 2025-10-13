@@ -9,7 +9,7 @@ CREATE DATABASE slsk_music;
 
 # 2. Clone and install
 git clone <repo>
-cd slsk-music-api
+cd swgz-api
 npm install
 
 # 3. Configure
@@ -28,7 +28,7 @@ npm run seed
 npm run start:dev
 ```
 
-**Default Admin:** `admin@slsk-music.com` / `SuperAdmin@2025`
+**Default Admin:** `admin@swgz.com` / `SuperAdmin@2025`
 
 ---
 
@@ -260,8 +260,8 @@ docker-compose logs -f
 
 **SystemD:**
 ```bash
-sudo systemctl start slsk-music-api
-sudo systemctl status slsk-music-api
+sudo systemctl start swgz-api
+sudo systemctl status swgz-api
 ```
 
 ---
@@ -305,7 +305,7 @@ curl http://localhost:3000/api/health
 pm2 logs slsk-api
 
 # SystemD
-sudo journalctl -u slsk-music-api -f
+sudo journalctl -u swgz-api -f
 
 # Docker
 docker-compose logs -f

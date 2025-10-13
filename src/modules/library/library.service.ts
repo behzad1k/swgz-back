@@ -9,6 +9,7 @@ import { MusicService } from '../music/music.service';
 import { Song } from '../music/entities/song.entity';
 import { Activity, ActivityType } from '../social/entities/social.entities';
 import { SwagzService, SwagzAction } from '../swagz/swagz.service';
+import { PlayHistory } from './entities/play-history.entity';
 
 @Injectable()
 export class LibraryService {
@@ -19,6 +20,8 @@ export class LibraryService {
     private songRepository: Repository<Song>,
     @InjectRepository(Activity)
     private activityRepository: Repository<Activity>,
+    @InjectRepository(PlayHistory)
+    private playHistoryRepository: Repository<PlayHistory>,
     private musicService: MusicService,
     private swagzService: SwagzService,
   ) {}
@@ -61,6 +64,19 @@ export class LibraryService {
     return librarySong;
   }
 
+  async recordPlay(songId: string, user: User) {
+    await this.playHistoryRepository.save({
+      userId: user.id,
+      songId,
+    });
+
+    await this.songRepository.increment({ id: songId }, 'playCount', 1);
+
+    // Award swagz for streaming
+    await this.swagzService.awardSwagz(user.id, SwagzAction.STREAM);
+  }
+
+
   async removeFromLibrary(userId: string, songId: string) {
     const librarySong = await this.librarySongRepository.findOne({
       where: { userId, songId },
@@ -92,6 +108,35 @@ export class LibraryService {
       relations: ['song'],
       order: { addedAt: 'DESC' },
     });
+  }
+
+  async getRecentlyPlayed(userId: string, limit: number = 20) {
+    return this.playHistoryRepository.find({
+      where: { userId },
+      relations: ['song'],
+      order: { playedAt: 'DESC' },
+      take: limit,
+    });
+  }
+
+  async getMostListened(userId: string, limit: number = 20) {
+    const result = await this.playHistoryRepository
+    .createQueryBuilder('ph')
+    .select('ph.songId', 'songId')
+    .addSelect('COUNT(*)', 'playCount')
+    .where('ph.userId = :userId', { userId })
+    .groupBy('ph.songId')
+    .orderBy('playCount', 'DESC')
+    .limit(limit)
+    .getRawMany();
+
+    const songIds = result.map((r) => r.songId);
+    const songs = await this.songRepository.findByIds(songIds);
+
+    return result.map((r) => ({
+      song: songs.find((s) => s.id === r.songId),
+      playCount: parseInt(r.playCount),
+    }));
   }
 
   async toggleLike(userId: string, songId: string) {

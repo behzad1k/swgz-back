@@ -4,7 +4,7 @@ version: '3.8'
 services:
   mysql:
     image: mysql:8.0
-    container_name: slsk-music-db
+    container_name: swgz-db
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: slsk_music
@@ -19,7 +19,7 @@ services:
 
   api:
     build: .
-    container_name: slsk-music-api
+    container_name: swgz-api
     depends_on:
       - mysql
     ports:
