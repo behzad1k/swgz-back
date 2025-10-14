@@ -14,7 +14,7 @@ export class Artist {
   name: string;
 
   @Column({ nullable: true })
-  image?: string;
+  pfp?: string;
 
   @Column({ nullable: true, unique: true })
   lastFMLink?: string;

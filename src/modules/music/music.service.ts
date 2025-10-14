@@ -64,10 +64,9 @@ export class MusicService {
       case 'artist':
         cachedResult = await this.artistRepository.find({ where: { name: Like(`%${query}%`)}, order: { externalListeners: 'DESC' } })
 
-        newResult = await this.lastFMService.artistSearch(query, 20);
-
-        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult), SEARCH_FILTERS.artist, 'image')
-
+        newResult = await this.lastFMService.artistSearch(query, 10);
+        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult), SEARCH_FILTERS.artist, 'pfp')
+        console.log('filtered', formattedResult);
         try{
           await this.artistRepository.save(formattedResult)
         }
@@ -199,7 +198,7 @@ export class MusicService {
 
       await this.songRepository.save(formattedResultSongs);
 
-      artist.songs = [...cachedSongs, formattedResultSongs]
+      artist.songs = [...cachedSongs, ...formattedResultSongs]
     }
 
     if (shouldSearchAlbums){
@@ -207,7 +206,7 @@ export class MusicService {
 
       const cachedAlbums = await this.albumRepository.find({ where: [{ artistId: artist.id }, { mbid: In(albums.map(e => e.mbid))}, { lastFMLink: In(albums.map(e => e.url))}] })
       const formattedAlbums = albums.filter(e => !cachedAlbums.find(j => (e.url == j.lastFMLink || e.mbid == j.mbid))).map(e => applyMapping<Album>(e, EXTERNAL_MAPPINGS.lastFM.album))
-      console.log(formattedAlbums);
+
       await this.albumRepository.save(formattedAlbums)
 
       artist.albums = [...cachedAlbums, ...formattedAlbums]

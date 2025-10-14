@@ -12,6 +12,8 @@ export class LastfmService {
   private lastFmApiKey = process.env.LASTFM_API_KEY;
 
   async formatResult(result: any, filter: SEARCH_FILTERS, key: string = 'albumCover'): Promise<any> {
+    const finalResult = []
+
     try {
       const fetchResult = await Promise.all(result.map(obj =>
         axios.get(obj.url, {
@@ -36,13 +38,14 @@ export class LastfmService {
           }
         }
         if (coverRegex && coverRegex[3]) result[index][key] = coverRegex[3];
-        result[index] = applyMapping<Track>(result[index], EXTERNAL_MAPPINGS.lastFM[filter]);
+        console.log(result[index]);
+        finalResult.push(applyMapping(result[index], EXTERNAL_MAPPINGS.lastFM[filter]))
       });
     } catch (e) {
       console.log(e?.message);
       console.log(e?.response?.data);
     }
-    return result;
+    return finalResult;
   }
 
   async trackSearch(query: string, limit = 10): Promise<LastFM.Track[]> {

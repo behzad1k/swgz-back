@@ -1889,7 +1889,7 @@
           "name": {
             "type": "string"
           },
-          "image": {
+          "pfp": {
             "type": "string"
           },
           "lastFMLink": {

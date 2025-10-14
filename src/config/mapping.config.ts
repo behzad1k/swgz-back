@@ -14,10 +14,11 @@ export const EXTERNAL_MAPPINGS = {
       name: 'name',
       mbid: 'mbid',
       lastFMLink: 'url',
-      externalListeners: (data: any)=> data.stats.listeners,
-      externalPlays: (data: any)=> data.stats.playcount,
-      bio: (data: any)=> data.bio.summary,
-      fullBio: (data: any)=> data.bio.content,
+      pfp: 'pfp',
+      externalListeners: (data: any)=> data.stats?.listeners,
+      externalPlays: (data: any)=> data.stats?.playcount,
+      bio: (data: any)=> data.bio?.summary,
+      fullBio: (data: any)=> data.bio?.content,
     },
     album: {
       title: 'name',
@@ -25,6 +26,7 @@ export const EXTERNAL_MAPPINGS = {
       lastFMLink: 'url',
       externalListens: 'listeners',
       externalPlays: 'playcount',
+      pfp: 'pfp',
       rankForArtist: (data: any)=> data['@attr']?.rank,
       artistName: (data: any)=> data.artist.name,
       albumCover: (data: any) => data.image ? (Array.isArray(data.image) ? data.image[data.image.length -1]['#text'] : data.image['#text']) : ''

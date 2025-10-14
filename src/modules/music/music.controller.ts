@@ -42,7 +42,7 @@ export class MusicController {
       });
     }
 
-    await this.streamingService.streamSong(songId, res, preferFlac);
+    await this.streamingService.streamSong(songId, res, true);
   }
 
   @Get('recent-searches')
