@@ -18,6 +18,16 @@ export const EXTERNAL_MAPPINGS = {
       externalPlays: (data: any)=> data.stats.playcount,
       bio: (data: any)=> data.bio.summary,
       fullBio: (data: any)=> data.bio.content,
+    },
+    album: {
+      title: 'name',
+      mbid: 'mbid',
+      lastFMLink: 'url',
+      externalListens: 'listeners',
+      externalPlays: 'playcount',
+      rankForArtist: (data: any)=> data['@attr']?.rank,
+      artistName: (data: any)=> data.artist.name,
+      albumCover: (data: any) => data.image ? (Array.isArray(data.image) ? data.image[data.image.length -1]['#text'] : data.image['#text']) : ''
     }
   },
   discogs: {

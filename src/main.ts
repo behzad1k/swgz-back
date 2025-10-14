@@ -24,14 +24,13 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-  .setTitle('Your API')
-  .setDescription('Your API description')
+  .setTitle('swgz')
+  .setDescription('swgz API Documentation')
   .setVersion('1.0')
-  .addTag('your-tag')
   .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('swagger/', app, document);
+  SwaggerModule.setup('swagger', app, document);
   fs.writeFileSync('./openapi-spec.json', JSON.stringify(document, null, 2));
 
   const port = process.env.PORT || 3000;

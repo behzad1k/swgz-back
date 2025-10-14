@@ -58,5 +58,6 @@ jobs:
             npm ci
             rm -rf dist
             npm run build
+            npm ci --only=production  # Reinstall only production deps
             sudo systemctl restart swgz-back
             sudo systemctl status swgz-back --no-pager

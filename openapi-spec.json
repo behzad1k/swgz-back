@@ -1692,17 +1692,12 @@
     }
   },
   "info": {
-    "title": "Your API",
-    "description": "Your API description",
+    "title": "swgz",
+    "description": "swgz API Documentation",
     "version": "1.0",
     "contact": {}
   },
-  "tags": [
-    {
-      "name": "your-tag",
-      "description": ""
-    }
-  ],
+  "tags": [],
   "servers": [],
   "components": {
     "schemas": {
@@ -1822,6 +1817,69 @@
           "playedAt"
         ]
       },
+      "Album": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "albumCover": {
+            "type": "string"
+          },
+          "lastFMLink": {
+            "type": "string"
+          },
+          "artistId": {
+            "type": "string"
+          },
+          "externalListeners": {
+            "type": "number"
+          },
+          "externalPlays": {
+            "type": "number"
+          },
+          "mbid": {
+            "type": "string"
+          },
+          "releaseDate": {
+            "type": "string"
+          },
+          "rankForArtist": {
+            "type": "number"
+          },
+          "artistName": {
+            "type": "string"
+          },
+          "songs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Song"
+            }
+          },
+          "artist": {
+            "$ref": "#/components/schemas/Artist"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "songs",
+          "artist",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
       "Artist": {
         "type": "object",
         "properties": {
@@ -1858,6 +1916,12 @@
               "$ref": "#/components/schemas/Song"
             }
           },
+          "albums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Album"
+            }
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -1871,6 +1935,7 @@
           "id",
           "name",
           "songs",
+          "albums",
           "createdAt",
           "updatedAt"
         ]

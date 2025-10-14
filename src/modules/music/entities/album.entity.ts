@@ -1,23 +1,26 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany, ManyToOne, JoinColumn } from 'typeorm';
 import { LibrarySong } from '../../library/entities/library-song.entity';
 import { PlaylistSong } from '../../playlist/entities/playlist-song.entity';
 import { PlayHistory } from '../../library/entities/play-history.entity';
-import { Album } from './album.entity';
+import { Artist } from './artist.entity';
 import { Song } from './song.entity';
 
-@Entity('artists')
-export class Artist {
+@Entity('albums')
+export class Album {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Column()
-  name: string;
+  title: string;
 
   @Column({ nullable: true })
-  image?: string;
+  albumCover?: string;
 
   @Column({ nullable: true, unique: true })
   lastFMLink?: string;
+
+  @Column({ nullable: true })
+  artistId?: string;
 
   @Column({ nullable: true })
   externalListeners?: number;
@@ -28,17 +31,21 @@ export class Artist {
   @Column({ nullable: true })
   mbid?: string;
 
-  @Column({ nullable: true, type: 'longtext' })
-  bio?: string;
+  @Column({ nullable: true })
+  releaseDate?: string;
 
-  @Column({ nullable: true, type: 'longtext'})
-  fullBio?: string;
+  @Column({ nullable: true })
+  rankForArtist?: number;
+
+  @Column({ nullable: true })
+  artistName?: string;
 
   @OneToMany(() => Song, song => song.artist)
   songs: Song[];
 
-  @OneToMany(() => Album, album => album.artist)
-  albums: Album[];
+  @ManyToOne(() => Artist, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'artistId' })
+  artist: Artist;
 
   @CreateDateColumn()
   createdAt: Date;

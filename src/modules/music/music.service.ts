@@ -10,6 +10,7 @@ import { User } from '../users/entities/user.entity';
 import { DiscogsService } from './discogs.service';
 import { PlaySongDto } from './dto/music.dto';
 import { PlayHistory } from '../library/entities/play-history.entity';
+import { Album } from './entities/album.entity';
 import { Artist } from './entities/artist.entity';
 import { SearchHistory } from './entities/search-history.entity';
 import { Song } from './entities/song.entity';
@@ -23,6 +24,8 @@ export class MusicService {
     private songRepository: Repository<Song>,
     @InjectRepository(Artist)
     private artistRepository: Repository<Artist>,
+    @InjectRepository(Album)
+    private albumRepository: Repository<Album>,
     @InjectRepository(SearchHistory)
     private searchHistoryRepository: Repository<SearchHistory>,
     @Inject(forwardRef(() => LibraryService))
@@ -45,26 +48,25 @@ export class MusicService {
     switch (filter) {
       case 'track':
         cachedResult = await this.songRepository.find({ where: { title: Like(`%${query}%`)}, order: { externalListens: 'DESC' } })
+
         newResult = await this.lastFMService.trackSearch(query);
 
         formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateSongs(cachedResult, newResult), SEARCH_FILTERS.track)
 
-        // Save the new songs to the database for future references
-        // insert method mixes up the id's we can use the save method but it takes much more time to excute
         try{
-          await this.songRepository.insert(formattedResult)
+          await this.songRepository.save(formattedResult)
         }
         catch(err){
           console.error(err);
         }
-        // await this.songRepository.save(newResult)
 
-        return [...cachedResult, ...formattedResult].map(e => { const { id: _, ...newObj } = e; return newObj}).sort((a, b) => b.externalListens - a.externalListens);
+        return [...cachedResult, ...formattedResult].sort((a, b) => b.externalListens - a.externalListens);
       case 'artist':
         cachedResult = await this.artistRepository.find({ where: { name: Like(`%${query}%`)}, order: { externalListeners: 'DESC' } })
 
         newResult = await this.lastFMService.artistSearch(query, 20);
-        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult.filter(e => e.mbid)), SEARCH_FILTERS.artist, 'image')
+
+        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult), SEARCH_FILTERS.artist, 'image')
 
         try{
           await this.artistRepository.save(formattedResult)
@@ -72,6 +74,7 @@ export class MusicService {
         catch(err){
           console.error(err);
         }
+
         return [...cachedResult, ...formattedResult].sort((a, b) => b.externalListeners - a.externalListeners);
       case 'album':
         return await this.lastFMService.albumSearch(query);
@@ -156,22 +159,64 @@ export class MusicService {
     return relatedSongs;
   }
 
+  async fetchAlbumInfo(albumId: string): Promise<Album>{
+    const album = await this.albumRepository.findOne({ where: { id: albumId } });
+  //   TODO:
+    return album
+  }
+
   async fetchArtistInfo(artistId: string): Promise<Artist>{
     let artist
     try {
-      artist = await this.artistRepository.findOne({ where: { id: artistId } });
+      artist = await this.artistRepository.findOne({ where: { id: artistId }, relations: { songs: true, albums: true } });
     } catch (e){
       throw new NotFoundException('Artist Not Found')
     }
-    if (!artist?.bio) {
+
+    const shouldSearchArtist = !artist.bio;
+    const shouldSearchSongs = artist.songs.length <= 5;
+    const shouldSearchAlbums = artist.albums.length == 0;
+
+    let formattedArtist = null;
+
+    if (shouldSearchArtist) {
       const artistDetail = await this.lastFMService.getArtistData(artist);
-      const formattedArtist = {
+      formattedArtist = {
         id: artist.id,
         image: artist.image,
         ...(applyMapping({ ...artist, ...artistDetail }, EXTERNAL_MAPPINGS.lastFM.artist) as any)
       }
-      artist = await this.artistRepository.save(formattedArtist);
+
+      artist = formattedArtist;
     }
+
+    if (shouldSearchSongs){
+      const songs = await this.lastFMService.getArtistTopSongs(artist);
+
+      const cachedSongs = await this.songRepository.find({ where: [{ mbid: In(songs.map(e => e.mbid)) }, { lastFMLink: In(songs.map((e: any) => e.url))}]})
+
+      const formattedResultSongs = await this.lastFMService.formatResult(songs.filter(e => !cachedSongs.find(j => (j.mbid == e.mbid || j.lastFMLink == e.url))), SEARCH_FILTERS.track);
+
+      await this.songRepository.save(formattedResultSongs);
+
+      artist.songs = [...cachedSongs, formattedResultSongs]
+    }
+
+    if (shouldSearchAlbums){
+      const albums = await this.lastFMService.getArtistAlbums(artist);
+
+      const cachedAlbums = await this.albumRepository.find({ where: [{ artistId: artist.id }, { mbid: In(albums.map(e => e.mbid))}, { lastFMLink: In(albums.map(e => e.url))}] })
+      const formattedAlbums = albums.filter(e => !cachedAlbums.find(j => (e.url == j.lastFMLink || e.mbid == j.mbid))).map(e => applyMapping<Album>(e, EXTERNAL_MAPPINGS.lastFM.album))
+      console.log(formattedAlbums);
+      await this.albumRepository.save(formattedAlbums)
+
+      artist.albums = [...cachedAlbums, ...formattedAlbums]
+    }
+
+    if (shouldSearchArtist || shouldSearchSongs){
+      await this.artistRepository.save(artist)
+    }
+
 
     // TODO: similar artists
 

@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LibraryModule } from '../library/library.module';
 import { DiscogsService } from './discogs.service';
+import { Album } from './entities/album.entity';
 import { Artist } from './entities/artist.entity';
 import { Song } from './entities/song.entity';
 import { SearchHistory } from './entities/search-history.entity';
@@ -14,7 +15,7 @@ import { StreamingService } from './streaming.service';
 import { SwagzModule } from '../swagz/swagz.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Song, SearchHistory, PlayHistory, Artist]), SwagzModule, forwardRef(() => LibraryModule)],
+  imports: [TypeOrmModule.forFeature([Song, SearchHistory, PlayHistory, Artist, Album]), SwagzModule, forwardRef(() => LibraryModule)],
   controllers: [MusicController],
   providers: [MusicService, LastfmService, SlskService, StreamingService, DiscogsService],
   exports: [MusicService, SlskService],

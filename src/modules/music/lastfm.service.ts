@@ -104,9 +104,40 @@ export class LastfmService {
       params.mbid = song.mbid;
     }
     const response = await axios.get('http://ws.audioscrobbler.com/2.0/', { params });
-    console.log(response.data);
+
     return response.data.similartracks.track;
   }
+
+  async getArtistTopSongs(artist: Artist, limit = 10): Promise<LastFM.Track[]> {
+    const params: any = {
+      method: 'artist.gettoptracks',
+      api_key: this.lastFmApiKey,
+      format: 'json',
+      artist: artist.name,
+      limit
+    }
+    if (artist.mbid) params.mbid = artist.mbid;
+
+    const topSongs = await axios.get('http://ws.audioscrobbler.com/2.0/', { params });
+
+    return topSongs.data.toptracks.track;
+  }
+
+  async getArtistAlbums(artist: Artist, limit = 10): Promise<LastFM.Album[]> {
+    const params: any = {
+      method: 'artist.gettopalbums',
+      api_key: this.lastFmApiKey,
+      format: 'json',
+      artist: artist.name,
+      limit
+    }
+    if (artist.mbid) params.mbid = artist.mbid;
+
+    const albums = await axios.get('http://ws.audioscrobbler.com/2.0/', { params });
+
+    return albums.data.topalbums.album;
+  }
+
 
   removeCachedDuplicateSongs(cachedArray: Song[], array2: any[]) {
     const cachedLinks = new Set(cachedArray.map(t => t.lastFMLink));

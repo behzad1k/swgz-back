@@ -20,6 +20,7 @@ namespace LastFM {
     artist:	string
     url:	string
     image: Image[]
+    mbid?:	string
   }
 
   export interface Artist {
