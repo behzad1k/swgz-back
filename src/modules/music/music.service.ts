@@ -182,7 +182,7 @@ export class MusicService {
       const artistDetail = await this.lastFMService.getArtistData(artist);
       formattedArtist = {
         id: artist.id,
-        image: artist.image,
+        pfp: artist.pfp,
         ...(applyMapping({ ...artist, ...artistDetail }, EXTERNAL_MAPPINGS.lastFM.artist) as any)
       }
 
