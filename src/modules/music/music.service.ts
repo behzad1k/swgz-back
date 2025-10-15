@@ -212,7 +212,7 @@ export class MusicService {
       artist.albums = [...cachedAlbums, ...formattedAlbums]
     }
 
-    if (shouldSearchArtist || shouldSearchSongs){
+    if (shouldSearchArtist || shouldSearchSongs || shouldSearchAlbums){
       await this.artistRepository.save(artist)
     }
 
