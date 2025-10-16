@@ -155,10 +155,12 @@ export class StreamingService {
     console.log(`❌ Marked quality ${quality} as unavailable for song ${songId}`);
   }
 
+  private qualityToBitRate = (quality: QualityPreference) => quality == 'flac' ? '700' : quality;
+
   async streamSong(
     songId: string,
     res: Response,
-    preferFlac: boolean = false
+    quality: QualityPreference = '320'
   ): Promise<void> {
     const song = await this.songRepository.findOne({
       where: { id: songId },
@@ -169,22 +171,20 @@ export class StreamingService {
       throw new NotFoundException('Song not found');
     }
 
-    const requestedQuality: QualityPreference = preferFlac ? 'flac' : '320';
-
     // 1. Check if requested quality is marked unavailable
-    const isUnavailable = await this.isQualityUnavailable(songId, requestedQuality);
+    const isUnavailable = await this.isQualityUnavailable(songId, quality);
 
     // 2. Find best available quality (with fallback)
-    const qualityResult = await this.findBestAvailableQualityWithFallback(song, requestedQuality);
+    const qualityResult = await this.findBestAvailableQualityWithFallback(song, quality);
 
     if (isUnavailable && qualityResult) {
       if (!qualityResult.wasRequested) {
         // Return error with fallback info
-        console.log(`⚠️ Requested quality ${requestedQuality} not available, using fallback: ${qualityResult.quality}`);
+        console.log(`⚠️ Requested quality ${quality} not available, using fallback: ${qualityResult.quality}`);
 
         // Set custom header to inform client about fallback
         res.setHeader('X-Quality-Fallback', qualityResult.quality);
-        res.setHeader('X-Requested-Quality', requestedQuality);
+        res.setHeader('X-Requested-Quality', quality);
       }
 
       console.log(`📂 Streaming from downloaded file (${qualityResult.quality}):`, qualityResult.path);
@@ -193,14 +193,14 @@ export class StreamingService {
 
     // 3. If requested quality is unavailable, try fallback before downloading
     if (isUnavailable) {
-      console.log(`⚠️ Requested quality ${requestedQuality} is marked unavailable, trying fallback`);
-      const fallbackQualities = this.QUALITY_HIERARCHY[requestedQuality]?.slice(1) || [];
+      console.log(`⚠️ Requested quality ${quality} is marked unavailable, trying fallback`);
+      const fallbackQualities = this.QUALITY_HIERARCHY[quality]?.slice(1) || [];
 
       for (const fallbackQuality of fallbackQualities) {
         const fallbackResult = await this.findBestAvailableQualityWithFallback(song, fallbackQuality as QualityPreference);
         if (fallbackResult) {
           res.setHeader('X-Quality-Fallback', fallbackResult.quality);
-          res.setHeader('X-Requested-Quality', requestedQuality);
+          res.setHeader('X-Requested-Quality', quality);
           console.log(`📂 Using fallback quality ${fallbackResult.quality}`);
           return this.streamFromFile(fallbackResult.path, res);
         }
@@ -208,7 +208,7 @@ export class StreamingService {
     }
 
     // 4. Check cache
-    const cacheKey = this.getCacheKey(songId, requestedQuality);
+    const cacheKey = this.getCacheKey(songId, quality);
     const cachedPath = this.streamCache.get(cacheKey);
     if (cachedPath && existsSync(cachedPath)) {
       console.log('💾 Streaming from cached temp file:', cachedPath);
@@ -232,7 +232,7 @@ export class StreamingService {
     }
 
     // 6. Check temp directory
-    const existingTempFile = await this.findSongInTempDir(songId, requestedQuality);
+    const existingTempFile = await this.findSongInTempDir(songId, quality);
     if (existingTempFile) {
       console.log('🔍 Found existing temp file:', existingTempFile);
       this.streamCache.set(cacheKey, existingTempFile);
@@ -240,14 +240,14 @@ export class StreamingService {
     }
 
     // 6. Start new download with lock - CRITICAL FIX
-    const lockKey = `${songId}-${requestedQuality}`;
+    const lockKey = `${songId}-${quality}`;
 
     if (this.downloadLocks.has(lockKey)) {
       console.log('🔒 Download already starting, waiting for lock...');
       await this.downloadLocks.get(lockKey);
 
       // After lock released, check if file is now available
-      const qualityResultAfterLock = await this.findBestAvailableQualityWithFallback(song, requestedQuality);
+      const qualityResultAfterLock = await this.findBestAvailableQualityWithFallback(song, quality);
       if (qualityResultAfterLock) {
         return this.streamFromFile(qualityResultAfterLock.path, res);
       }
@@ -261,8 +261,8 @@ export class StreamingService {
     this.downloadLocks.set(lockKey, lockPromise);
 
     try {
-    console.log(`⬇️ Starting new download: ${song.title} - ${song.artistName} (${requestedQuality})`);
-      await this.downloadAndStream(song, res, requestedQuality);
+    console.log(`⬇️ Starting new download: ${song.title} - ${song.artistName} (${quality})`);
+      await this.downloadAndStream(song, res, quality);
     } finally {
       // Release lock
       releaseLock!();
@@ -556,12 +556,18 @@ export class StreamingService {
     const args = [
       input,
       '-p', this.tempDir,
-      '--pref-format', format,
-     '--format', format, // CRITICAL: Add --format to enforce strict matching
       '-c', configPath,
       '--no-progress',
       '--name-format', tempFilePrefix,
     ];
+
+    if (requestedQuality == 'flac'){
+      args.push('--format', 'flac')
+      args.push('--pref-min-bitrate', '500');
+    } else {
+      args.push('--pref-min-bitrate', (parseInt(requestedQuality) - 20).toString());
+      args.push('--pref-max-bitrate', (parseInt(requestedQuality) + 20).toString());
+    }
 
     const sldl = spawn(process.env.SLDL_PATH || 'sldl', args);
     download.process = sldl;
@@ -668,18 +674,12 @@ export class StreamingService {
         return 'flac';
       case '320':
         return '320'; // Only 320, no fallback in sldl command
-      case 'v0':
-        return 'v0';
       case '256':
         return '256';
       case '192':
         return '192';
       case '128':
         return '128';
-      case 'standard':
-        return '320'; // Default to 320 for "standard"
-      case 'any':
-        return 'mp3';
       default:
         return '320';
     }

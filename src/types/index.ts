@@ -153,6 +153,6 @@ export interface CronJobConfig {
   description?: string;
 }
 
-export type QualityPreference = 'flac' | '320' | 'v0' | '256' | '192' | '128' | 'standard' | 'any';
+export type QualityPreference = 'flac' | '320' | '256' | '192' | '128';
 
 export type SearchFilter = 'all' | 'track' | 'artist' | 'album' | 'stalker'

@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Query, Param, UseGuards, Body, Res, NotFoundException, Req, HttpCode } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
-import { SearchFilter } from '../../types';
+import { QualityPreference, SearchFilter } from '../../types';
 import { PlaySongDto } from './dto/music.dto';
 import { MusicService } from './music.service';
 import { StreamingService } from './streaming.service';
@@ -35,25 +35,21 @@ export class MusicController {
   @HttpCode(200)
   async streamSong(
     @Param('id') songId: string,
-    @Query('flac') preferFlac: string | boolean,
     @Query('api-key') apiKey: string,
-    @Query('quality') quality: string,
+    @Query('quality') quality: QualityPreference,
     @CurrentUser() user: User,
     @Res() res: Response,
     @Req() req: Request,
   ) {
-    // Parse quality preference
-    const wantsFlac = preferFlac === true || preferFlac === 'true' || quality === 'flac';
-
     // Only premium users can stream FLAC
-    if (wantsFlac && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
+    if (quality == 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
       return res.status(403).json({
         error: 'FLAC streaming requires premium subscription',
         requestedQuality: 'flac',
       });
     }
     // Handle GET request - normal streaming
-    await this.streamingService.streamSong(songId, res, wantsFlac);
+    await this.streamingService.streamSong(songId, res, quality);
   }
 
   @Get('recent-searches')
