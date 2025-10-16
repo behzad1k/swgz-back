@@ -140,14 +140,15 @@ export class StreamingService {
 
     if (existing) {
       existing.unavailable = true;
-      await this.songQualityRepository.save(existing);
+      await this.songQualityRepository.update({ id: songId, quality }, { unavailable: true });
     } else {
       const songQuality = this.songQualityRepository.create({
         songId,
         quality,
-        path: '', // Empty path since unavailable
+        path: null,
         extension,
         unavailable: true,
+        size: 0
       });
       await this.songQualityRepository.save(songQuality);
     }
@@ -576,12 +577,12 @@ export class StreamingService {
       const output = data.toString().trim();
       console.log('SLDL stdout:', output);
 
-     if (output.includes('InProgress:') && !streamingStarted) {
-       console.log('🎯 InProgress detected! Finding file and starting stream...');
-       setTimeout(() => {
-         findFileAndStartStreaming();
-       }, 100);
-     }
+     // if (output.includes('InProgress:') && !streamingStarted) {
+     //   console.log('🎯 InProgress detected! Finding file and starting stream...');
+     //   setTimeout(() => {
+     //     findFileAndStartStreaming();
+     //   }, 100);
+     // }
 
       // Detect if no results were found
       if (output.includes('NotFound') || output.includes('No results')) {
@@ -617,7 +618,7 @@ export class StreamingService {
       console.log('SLDL process closed with code:', code);
       download.isComplete = true;
       cleanup();
-
+      await findFileAndStartStreaming()
       // CRITICAL FIX: Only mark as unavailable if actually failed
       if (code === 0 && download.filePath && !downloadFailed) {
         await this.handleSuccessfulDownload(song, download);
@@ -888,6 +889,7 @@ export class StreamingService {
         existingQuality.path = permanentPath;
         existingQuality.extension = ext;
         existingQuality.unavailable = false; // Mark as available now
+        existingQuality.size = stats.size;
         await this.songQualityRepository.save(existingQuality);
         console.log('✅ Updated existing SongQuality entry');
       } else {
@@ -897,6 +899,7 @@ export class StreamingService {
           path: permanentPath,
           extension: ext,
           unavailable: false,
+          size: stats.size
         });
         await this.songQualityRepository.save(songQuality);
         console.log('✅ Created new SongQuality entry');

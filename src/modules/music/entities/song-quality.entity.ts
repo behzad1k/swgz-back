@@ -12,11 +12,14 @@ export class SongQuality {
   @Column()
   quality: string; // '320', 'v0', '256', '192', '128', 'flac', etc.
 
-  @Column()
+  @Column({ nullable: true})
   path: string;
 
   @Column()
   extension: string; // '.mp3', '.flac', '.ogg', etc.
+
+  @Column({ nullable: true })
+  size: number;
 
   @Column({ default: false })
   unavailable: boolean; // True when this quality was searched but not found on Soulseek
