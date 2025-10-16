@@ -36,9 +36,11 @@ export class LastfmService {
             }
             result[index]['duration'] = finalDuration;
           }
+        } else if (filter == SEARCH_FILTERS.artist){
+          const listenersRegex = (/<abbr[^>]*\stitle="([^"]*)"[^>]*>/gi).exec(data.data)
+          if (listenersRegex && listenersRegex[1]) result[index]['listeners'] = parseInt(listenersRegex[1].replaceAll(',', ''));
         }
         if (coverRegex && coverRegex[3]) result[index][key] = coverRegex[3];
-        console.log(result[index]);
         finalResult.push(applyMapping(result[index], EXTERNAL_MAPPINGS.lastFM[filter]))
       });
     } catch (e) {

@@ -64,9 +64,10 @@ export class MusicService {
       case 'artist':
         cachedResult = await this.artistRepository.find({ where: { name: Like(`%${query}%`)}, order: { externalListeners: 'DESC' } })
 
-        newResult = await this.lastFMService.artistSearch(query, 10);
-        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult), SEARCH_FILTERS.artist, 'pfp')
-        console.log('filtered', formattedResult);
+        newResult = await this.lastFMService.artistSearch(query, 20);
+
+        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult.filter(e => e.mbid)), SEARCH_FILTERS.artist, 'pfp')
+
         try{
           await this.artistRepository.save(formattedResult)
         }
@@ -212,6 +213,7 @@ export class MusicService {
       artist.albums = [...cachedAlbums, ...formattedAlbums]
     }
 
+    console.log(shouldSearchArtist || shouldSearchSongs || shouldSearchAlbums);
     if (shouldSearchArtist || shouldSearchSongs || shouldSearchAlbums){
       await this.artistRepository.save(artist)
     }

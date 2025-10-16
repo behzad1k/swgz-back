@@ -15,7 +15,7 @@ export const EXTERNAL_MAPPINGS = {
       mbid: 'mbid',
       lastFMLink: 'url',
       pfp: 'pfp',
-      externalListeners: (data: any)=> data.stats?.listeners,
+      externalListeners: (data: any)=> data.stats ? data.stats?.listeners : data.listeners,
       externalPlays: (data: any)=> data.stats?.playcount,
       bio: (data: any)=> data.bio?.summary,
       fullBio: (data: any)=> data.bio?.content,

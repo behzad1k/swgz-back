@@ -66,6 +66,9 @@ export class Song {
   @Column({ default: 0 })
   commentCount: number;
 
+  @Column({ default: null })
+  rankForArtist: number;
+
   @Column({ default: 0 })
   repostCount: number;
 
