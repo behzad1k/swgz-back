@@ -222,7 +222,7 @@ export class MusicService {
   async getAvailableQualities(songId: string) {
     const song = await this.songRepository.findOne({
       where: { id: songId },
-      relations: ['qualities'],
+      relations: { qualities: true },
     });
 
     if (!song) {

@@ -437,10 +437,8 @@ export class StreamingService {
     res: Response,
     requestedQuality: QualityPreference
   ): Promise<void> {
-    const format = this.buildFormatPreference(requestedQuality);
     const input = formatSldlInputStr(song);
     console.log('Input:', input);
-    console.log('Format preference:', format);
 
     const tempFilePrefix = `${song.id}-${requestedQuality}-${Date.now()}`;
     const cacheKey = this.getCacheKey(song.id, requestedQuality);

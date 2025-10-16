@@ -11,7 +11,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') {
 
   async validate(req: any) {
     const apiKey = req.query['api-key'];
-    console.log(apiKey);
     if (!apiKey) {
       throw new UnauthorizedException('API key is required');
     }
