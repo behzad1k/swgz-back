@@ -6,18 +6,14 @@ import { applyMapping, EXTERNAL_MAPPINGS } from '../../config/mapping.config';
 import { SearchFilter } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
 import { LibraryService } from '../library/library.service';
-import { SwagzAction, SwagzService } from '../swagz/swagz.service';
 import { User } from '../users/entities/user.entity';
 import { DiscogsService } from './discogs.service';
-import { PlaySongDto } from './dto/music.dto';
-import { PlayHistory } from '../library/entities/play-history.entity';
 import { Album } from './entities/album.entity';
 import { Artist } from './entities/artist.entity';
 import { SearchHistory } from './entities/search-history.entity';
 import { SongQuality } from './entities/song-quality.entity';
 import { Song } from './entities/song.entity';
 import { LastfmService } from './lastfm.service';
-import { SlskService } from './slsk.service';
 import { stat } from 'fs/promises';
 
 @Injectable()
@@ -37,8 +33,6 @@ export class MusicService {
     private libraryService: LibraryService,
     private lastFMService: LastfmService,
     private discogsService: DiscogsService,
-    private slskService: SlskService,
-    private swagzService: SwagzService,
   ) {}
 
   async search(query: string, user: User, filter: SearchFilter) {
@@ -48,39 +42,38 @@ export class MusicService {
       filter
     });
 
-    let cachedResult, newResult, formattedResult;
 
     switch (filter) {
       case 'track':
-        cachedResult = await this.songRepository.find({ where: { title: Like(`%${query}%`)}, order: { externalListens: 'DESC' } })
+        const cachedSongs  = await this.songRepository.find({ where: { title: Like(`%${query}%`)}, order: { externalListens: 'DESC' } })
 
-        newResult = await this.lastFMService.trackSearch(query);
+        const songResults = await this.lastFMService.trackSearch(query);
 
-        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateSongs(cachedResult, newResult), SEARCH_FILTERS.track)
+        const formattedSongs = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateSongs(cachedSongs, songResults), SEARCH_FILTERS.track)
 
         try{
-          await this.songRepository.save(formattedResult)
+          await this.songRepository.save(formattedSongs as Song[])
+        }
+        catch(err){
+          console.error(err);
+        }
+
+        return [...cachedSongs, ...formattedSongs].sort((a, b) => b.externalListens - a.externalListens).sort((a, b) => b.playCount - a.playCount);
+      case 'artist':
+        let cachedResult = await this.artistRepository.find({ where: { name: Like(`%${query}%`)}, order: { externalListeners: 'DESC' } })
+
+        let newResult = await this.lastFMService.artistSearch(query, 20);
+
+        let formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult.filter(e => e.mbid)), SEARCH_FILTERS.artist, 'pfp')
+
+        try{
+          await this.artistRepository.save(formattedResult as Artist[])
         }
         catch(err){
           console.error(err);
         }
 
         return [...cachedResult, ...formattedResult].sort((a, b) => b.externalListens - a.externalListens);
-      case 'artist':
-        cachedResult = await this.artistRepository.find({ where: { name: Like(`%${query}%`)}, order: { externalListeners: 'DESC' } })
-
-        newResult = await this.lastFMService.artistSearch(query, 20);
-
-        formattedResult = await this.lastFMService.formatResult(this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult.filter(e => e.mbid)), SEARCH_FILTERS.artist, 'pfp')
-
-        try{
-          await this.artistRepository.save(formattedResult)
-        }
-        catch(err){
-          console.error(err);
-        }
-
-        return [...cachedResult, ...formattedResult].sort((a, b) => b.externalListeners - a.externalListeners);
       case 'album':
         return await this.lastFMService.albumSearch(query);
       default:
@@ -338,47 +331,6 @@ export class MusicService {
   }
 
   /**
-   * Check if FLAC is available for a song
-   */
-  async checkFlacAvailability(songId: string): Promise<boolean> {
-    const song = await this.songRepository.findOne({
-      where: { id: songId },
-    });
-
-    if (!song) {
-      throw new NotFoundException('Song not found');
-    }
-
-    // Check if FLAC path exists and file is accessible
-    if (song.flacPath && existsSync(song.flacPath)) {
-      return true;
-    }
-
-    // Check in SongQuality table for FLAC entries (not marked unavailable)
-    const flacQuality = await this.songQualityRepository.findOne({
-      where: { songId, quality: 'flac', unavailable: false },
-    });
-
-    if (flacQuality && existsSync(flacQuality.path)) {
-      // Update song entity if not already set
-      if (!song.flacPath) {
-        song.flacPath = flacQuality.path;
-        song.hasFlac = true;
-        await this.songRepository.save(song);
-      }
-      return true;
-    }
-
-    // Check if FLAC is marked as unavailable
-    const unavailableFlac = await this.songQualityRepository.findOne({
-      where: { songId, quality: 'flac', unavailable: true },
-    });
-
-    // Return false if explicitly unavailable or not found
-    return false;
-  }
-
-  /**
    * Get quality fallback chain for a requested quality
    */
   getQualityFallbackChain(requestedQuality: string): string[] {
@@ -407,13 +359,5 @@ export class MusicService {
       await this.songQualityRepository.remove(songQuality);
       console.log(`✅ Reset unavailable flag for ${quality} quality of song ${songId}`);
     }
-  }
-
-
-  async getSongById(songId: string): Promise<Song | null> {
-    return this.songRepository.findOne({
-      where: { id: songId },
-      relations: ['qualities'],
-    });
   }
 }

@@ -5,7 +5,6 @@ import { SearchFilter } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
 import { Artist } from './entities/artist.entity';
 import { Song } from './entities/song.entity';
-import Track = LastFM.Track;
 
 @Injectable()
 export class LastfmService {
@@ -50,17 +49,17 @@ export class LastfmService {
     return finalResult;
   }
 
-  async trackSearch(query: string, limit = 10): Promise<LastFM.Track[]> {
+  async trackSearch(query: string, limit = 20): Promise<LastFM.Track[]> {
     const result = await this.search(query, SEARCH_FILTERS.track, limit);
     return result.trackmatches.track;
   }
 
-  async albumSearch(query: string, limit = 10): Promise<LastFM.Album[]> {
+  async albumSearch(query: string, limit = 20): Promise<LastFM.Album[]> {
     const result = await this.search(query, SEARCH_FILTERS.album, limit);
     return result.albummatches.album;
   }
 
-  async artistSearch(query: string, limit = 30): Promise<LastFM.Artist[]> {
+  async artistSearch(query: string, limit = 20): Promise<LastFM.Artist[]> {
     const result = await this.search(query, SEARCH_FILTERS.artist, limit);
     return result.artistmatches.artist;
   }

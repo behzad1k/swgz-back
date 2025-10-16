@@ -65,14 +65,6 @@ export class MusicController {
     return this.musicService.fetchArtistInfo(artistId);
   }
 
-  @Get('check-flac/:id')
-  @UseGuards(SubscriptionGuard)
-  @RequireSubscription(SubscriptionPlan.PREMIUM)
-  async checkFlacAvailability(@Param('id') songId: string) {
-    const hasFlac = await this.musicService.checkFlacAvailability(songId);
-    return { songId, hasFlac };
-  }
-
   @Get('qualities/:id')
   async getAvailableQualities(@Param('id') songId: string) {
     return this.musicService.getAvailableQualities(songId);
