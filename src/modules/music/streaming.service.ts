@@ -557,7 +557,7 @@ export class StreamingService {
       input,
       '-p', this.tempDir,
       '--pref-format', format,
-     // '--format', format, // CRITICAL: Add --format to enforce strict matching
+     '--format', format, // CRITICAL: Add --format to enforce strict matching
       '-c', configPath,
       '--no-progress',
       '--name-format', tempFilePrefix,
@@ -570,12 +570,12 @@ export class StreamingService {
       const output = data.toString().trim();
       console.log('SLDL stdout:', output);
 
-     // if (output.includes('InProgress:') && !streamingStarted) {
-      //  console.log('🎯 InProgress detected! Finding file and starting stream...');
-      //  setTimeout(() => {
-      //    findFileAndStartStreaming();
-      //  }, 100);
-     // }
+     if (output.includes('InProgress:') && !streamingStarted) {
+       console.log('🎯 InProgress detected! Finding file and starting stream...');
+       setTimeout(() => {
+         findFileAndStartStreaming();
+       }, 100);
+     }
 
       // Detect if no results were found
       if (output.includes('NotFound') || output.includes('No results')) {
