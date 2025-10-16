@@ -32,14 +32,11 @@ export class MusicController {
    * Stream endpoint - handles both GET and HEAD requests
    */
   @Get('stream/:id')
-  @HttpCode(200)
   async streamSong(
     @Param('id') songId: string,
-    @Query('api-key') apiKey: string,
     @Query('quality') quality: QualityPreference,
     @CurrentUser() user: User,
     @Res() res: Response,
-    @Req() req: Request,
   ) {
     // Only premium users can stream FLAC
     if (quality == 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {

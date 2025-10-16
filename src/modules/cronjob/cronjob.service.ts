@@ -103,6 +103,33 @@ export class CronService {
     }
   }
 
+  addImmediateCronJob(name: string, callback: () => void | Promise<void>) {
+    try {
+      // Create a cron job that runs immediately and then gets removed
+      const job = new CronJob('* * * * * *', async () => {
+        try {
+          await callback();
+        } catch (error) {
+          this.logger.error(`Immediate job "${name}" failed`, error.stack);
+        } finally {
+          // Remove the job after execution
+          try {
+            this.removeCronJob(name);
+          } catch (e) {
+            // Job might already be removed
+          }
+        }
+      });
+
+      this.schedulerRegistry.addCronJob(name, job);
+      job.start();
+      this.logger.log(`Immediate cron job "${name}" started`);
+    } catch (error) {
+      this.logger.error(`Failed to add immediate cron job "${name}"`, error.stack);
+      throw error;
+    }
+  }
+
   // Helper methods (implement your actual logic)
   private async performCleanup() {
     // Implement cleanup logic

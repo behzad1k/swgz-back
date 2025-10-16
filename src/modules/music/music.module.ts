@@ -1,5 +1,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { CronModule } from '../cronjob/cronjob.module';
+import { CronService } from '../cronjob/cronjob.service';
 import { LibraryModule } from '../library/library.module';
 import { DiscogsService } from './discogs.service';
 import { Album } from './entities/album.entity';
@@ -16,7 +18,7 @@ import { StreamingService } from './streaming.service';
 import { SwagzModule } from '../swagz/swagz.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Song, SearchHistory, PlayHistory, Artist, Album, SongQuality]), SwagzModule, forwardRef(() => LibraryModule)],
+  imports: [TypeOrmModule.forFeature([Song, SearchHistory, PlayHistory, Artist, Album, SongQuality]), SwagzModule, CronModule, forwardRef(() => LibraryModule)],
   controllers: [MusicController],
   providers: [MusicService, LastfmService, SlskService, StreamingService, DiscogsService],
   exports: [MusicService, SlskService],
