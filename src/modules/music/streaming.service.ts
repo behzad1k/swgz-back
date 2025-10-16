@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
 import { Response } from 'express';
 import { spawn, ChildProcess } from 'child_process';
 import { createReadStream, existsSync, watch, FSWatcher } from 'fs';
@@ -6,27 +6,51 @@ import { unlink, mkdir, readdir, rm } from 'fs/promises';
 import path from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { QualityPreference } from '../../types';
 import { formatSldlInputStr } from '../../utils/formatter';
 import { Song } from './entities/song.entity';
+import { SongQuality } from './entities/song-quality.entity';
 import { PassThrough } from 'stream';
 
 interface ActiveDownload {
   process: ChildProcess;
-  activeStreams: Set<PassThrough>; // Set of active PassThrough streams
+  activeStreams: Set<PassThrough>;
   filePath: string | null;
   isComplete: boolean;
+  requestedQuality: QualityPreference;
+  actualQuality: string | null; // What was actually downloaded
+}
+
+interface QualityFallbackResult {
+  quality: string;
+  path: string;
+  wasRequested: boolean;
 }
 
 @Injectable()
 export class StreamingService {
-  private streamCache = new Map<string, string>(); // songId -> file path in temp or downloads
-  private activeDownloads = new Map<string, ActiveDownload>(); // songId -> download info
+  private streamCache = new Map<string, string>();
+  private activeDownloads = new Map<string, ActiveDownload>();
+  private downloadLocks = new Map<string, Promise<void>>(); // Prevent concurrent downloads
   private tempDir: string;
   private downloadsDir: string;
+
+  // Quality priority hierarchy - based on slsk-batchdl's format preferences
+  private readonly QUALITY_HIERARCHY = {
+    'flac': ['flac'],
+    '320': ['320', 'v0', '256', '192', '128'], // 320kbps priority with fallbacks
+    'v0': ['v0', '320', '256', '192', '128'],
+    '256': ['256', '320', 'v0', '192', '128'],
+    '192': ['192', '256', '320', 'v0', '128'],
+    '128': ['128', '192', '256', '320', 'v0'],
+    'standard': ['320', 'v0', '256', '192', '128'], // same as 320
+  };
 
   constructor(
     @InjectRepository(Song)
     private songRepository: Repository<Song>,
+    @InjectRepository(SongQuality)
+    private songQualityRepository: Repository<SongQuality>,
   ) {
     this.tempDir = process.env.STREAM_TEMP_DIR || path.join(process.cwd(), 'temp', 'streams');
     this.downloadsDir = process.env.DOWNLOADS_DIR || path.join(process.cwd(), 'downloads');
@@ -42,57 +66,220 @@ export class StreamingService {
     }
   }
 
+  private getCacheKey(songId: string, quality: QualityPreference): string {
+    return `${songId}-${quality}`;
+  }
+
+  /**
+   * Find best available quality with fallback logic
+   */
+  private async findBestAvailableQualityWithFallback(
+    song: Song,
+    requestedQuality: QualityPreference
+  ): Promise<QualityFallbackResult | null> {
+    // Build priority list based on requested quality
+    const priorityList = this.QUALITY_HIERARCHY[requestedQuality] || ['320', 'v0', '256', '192'];
+
+    // Check if requested quality is FLAC
+    if (requestedQuality === 'flac') {
+      if (song.flacPath && existsSync(song.flacPath)) {
+        return { quality: 'flac', path: song.flacPath, wasRequested: true };
+      }
+
+      // Check SongQuality table for FLAC
+      const flacQuality = await this.songQualityRepository.findOne({
+        where: { songId: song.id, quality: 'flac', unavailable: false }
+      });
+      if (flacQuality && existsSync(flacQuality.path)) {
+        return { quality: 'flac', path: flacQuality.path, wasRequested: true };
+      }
+
+      // No fallback for FLAC - it's either available or not
+      return null;
+    }
+
+    // For non-FLAC qualities, check in priority order
+    for (const quality of priorityList) {
+      const wasRequested = quality === requestedQuality;
+
+      // Check standard path if it matches this quality
+      if (song.standardPath && song.standardQuality === quality && existsSync(song.standardPath)) {
+        return { quality, path: song.standardPath, wasRequested };
+      }
+
+      // Check SongQuality table
+      const songQuality = await this.songQualityRepository.findOne({
+        where: { songId: song.id, quality, unavailable: false }
+      });
+
+      if (songQuality && existsSync(songQuality.path)) {
+        return { quality, path: songQuality.path, wasRequested };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if a quality is marked as unavailable for this song
+   */
+  private async isQualityUnavailable(songId: string, quality: string): Promise<boolean> {
+    const songQuality = await this.songQualityRepository.findOne({
+      where: { songId, quality, unavailable: true }
+    });
+    return !!songQuality;
+  }
+
+  /**
+   * Mark a quality as unavailable for this song
+   */
+  private async markQualityUnavailable(songId: string, quality: string, extension: string = '.mp3'): Promise<void> {
+    const existing = await this.songQualityRepository.findOne({
+      where: { songId, quality }
+    });
+
+    if (existing) {
+      existing.unavailable = true;
+      await this.songQualityRepository.save(existing);
+    } else {
+      const songQuality = this.songQualityRepository.create({
+        songId,
+        quality,
+        path: '', // Empty path since unavailable
+        extension,
+        unavailable: true,
+      });
+      await this.songQualityRepository.save(songQuality);
+    }
+
+    console.log(`❌ Marked quality ${quality} as unavailable for song ${songId}`);
+  }
+
   async streamSong(
     songId: string,
     res: Response,
     preferFlac: boolean = false
   ): Promise<void> {
-    const song = await this.songRepository.findOne({ where: { id: songId } });
+    const song = await this.songRepository.findOne({
+      where: { id: songId },
+      relations: ['qualities']
+    });
+
     if (!song) {
       throw new NotFoundException('Song not found');
     }
 
-    // 1. Check if song is already downloaded
-    if (song.downloadedPath && existsSync(song.downloadedPath)) {
-      console.log('📂 Streaming from downloaded file:', song.downloadedPath);
-      return this.streamFromFile(song.downloadedPath, res);
+    const requestedQuality: QualityPreference = preferFlac ? 'flac' : '320';
+
+    // 1. Check if requested quality is marked unavailable
+    const isUnavailable = await this.isQualityUnavailable(songId, requestedQuality);
+
+    // 2. Find best available quality (with fallback)
+    const qualityResult = await this.findBestAvailableQualityWithFallback(song, requestedQuality);
+
+    if (isUnavailable && qualityResult) {
+      if (!qualityResult.wasRequested) {
+        // Return error with fallback info
+        console.log(`⚠️ Requested quality ${requestedQuality} not available, using fallback: ${qualityResult.quality}`);
+
+        // Set custom header to inform client about fallback
+        res.setHeader('X-Quality-Fallback', qualityResult.quality);
+        res.setHeader('X-Requested-Quality', requestedQuality);
+      }
+
+      console.log(`📂 Streaming from downloaded file (${qualityResult.quality}):`, qualityResult.path);
+      return this.streamFromFile(qualityResult.path, res);
     }
 
-    // 2. Check if song is in cache (temp directory)
-    const cachedPath = this.streamCache.get(songId);
+    // 3. If requested quality is unavailable, try fallback before downloading
+    if (isUnavailable) {
+      console.log(`⚠️ Requested quality ${requestedQuality} is marked unavailable, trying fallback`);
+      const fallbackQualities = this.QUALITY_HIERARCHY[requestedQuality]?.slice(1) || [];
+
+      for (const fallbackQuality of fallbackQualities) {
+        const fallbackResult = await this.findBestAvailableQualityWithFallback(song, fallbackQuality as QualityPreference);
+        if (fallbackResult) {
+          res.setHeader('X-Quality-Fallback', fallbackResult.quality);
+          res.setHeader('X-Requested-Quality', requestedQuality);
+          console.log(`📂 Using fallback quality ${fallbackResult.quality}`);
+          return this.streamFromFile(fallbackResult.path, res);
+        }
+      }
+    }
+
+    // 4. Check cache
+    const cacheKey = this.getCacheKey(songId, requestedQuality);
+    const cachedPath = this.streamCache.get(cacheKey);
     if (cachedPath && existsSync(cachedPath)) {
       console.log('💾 Streaming from cached temp file:', cachedPath);
       return this.streamFromFile(cachedPath, res);
     }
 
-    // 3. Check if song is currently being downloaded
-    const existingDownload = this.activeDownloads.get(songId);
-    if (existingDownload && existingDownload.filePath) {
+    // 5. Check if currently downloading
+    const existingDownload = this.activeDownloads.get(cacheKey);
+    if (existingDownload) {
+      if (existingDownload.filePath) {
       console.log('♻️ Joining existing download');
       return this.joinExistingDownload(existingDownload, res);
+      } else {
+        console.log('⏳ Download in progress, waiting...');
+        // Wait for download to start producing a file
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (existingDownload.filePath) {
+          return this.joinExistingDownload(existingDownload, res);
+        }
+      }
     }
 
-    // 4. Check temp directory for existing incomplete/complete files
-    const existingTempFile = await this.findSongInTempDir(songId);
+    // 6. Check temp directory
+    const existingTempFile = await this.findSongInTempDir(songId, requestedQuality);
     if (existingTempFile) {
       console.log('🔍 Found existing temp file:', existingTempFile);
-      this.streamCache.set(songId, existingTempFile);
+      this.streamCache.set(cacheKey, existingTempFile);
       return this.streamFromFile(existingTempFile, res);
     }
 
-    // 5. Start new download and stream
-    console.log('⬇️ Starting new download for:', song.title, '-', song.artistName);
-    return this.downloadAndStream(song, res, preferFlac);
+    // 6. Start new download with lock - CRITICAL FIX
+    const lockKey = `${songId}-${requestedQuality}`;
+
+    if (this.downloadLocks.has(lockKey)) {
+      console.log('🔒 Download already starting, waiting for lock...');
+      await this.downloadLocks.get(lockKey);
+
+      // After lock released, check if file is now available
+      const qualityResultAfterLock = await this.findBestAvailableQualityWithFallback(song, requestedQuality);
+      if (qualityResultAfterLock) {
+        return this.streamFromFile(qualityResultAfterLock.path, res);
+      }
+    }
+
+    // Create lock
+    let releaseLock: () => void;
+    const lockPromise = new Promise<void>(resolve => {
+      releaseLock = resolve;
+    });
+    this.downloadLocks.set(lockKey, lockPromise);
+
+    try {
+    console.log(`⬇️ Starting new download: ${song.title} - ${song.artistName} (${requestedQuality})`);
+      await this.downloadAndStream(song, res, requestedQuality);
+    } finally {
+      // Release lock
+      releaseLock!();
+      this.downloadLocks.delete(lockKey);
+    }
   }
 
-  private async findSongInTempDir(songId: string): Promise<string | null> {
+  private async findSongInTempDir(
+    songId: string,
+    quality: QualityPreference
+  ): Promise<string | null> {
     try {
       const files = await readdir(this.tempDir);
       const audioExtensions = ['.mp3', '.flac', '.opus', '.m4a', '.ogg'];
 
-      // Look for files that start with songId
       const matchingFiles = files.filter(file => {
-        const startsWithSongId = file.startsWith(`${songId}-`);
+        const startsWithSongId = file.startsWith(`${songId}-${quality}-`);
         const hasAudioExt = audioExtensions.some(ext =>
           file.endsWith(ext) || file.endsWith(ext + '.incomplete')
         );
@@ -100,7 +287,6 @@ export class StreamingService {
       });
 
       if (matchingFiles.length > 0) {
-        // Prefer complete files over incomplete
         const completeFile = matchingFiles.find(f => !f.endsWith('.incomplete'));
         const fileToUse = completeFile || matchingFiles[0];
         return path.join(this.tempDir, fileToUse);
@@ -134,7 +320,6 @@ export class StreamingService {
       const stream = createReadStream(filePath);
 
       stream.on('open', () => console.log('📖 File stream opened'));
-      stream.on('data', (chunk) => console.log('📦 Streaming chunk:', chunk.length, 'bytes'));
       stream.on('end', () => console.log('✅ File stream ended'));
       stream.on('close', () => console.log('🔒 File stream closed'));
 
@@ -170,7 +355,6 @@ export class StreamingService {
 
     console.log('📊 Active streams after join:', download.activeStreams.size);
 
-    // Handle client disconnect
     res.on('close', () => {
       console.log('❌ Client disconnected from joined download');
       download.activeStreams.delete(passThrough);
@@ -188,7 +372,6 @@ export class StreamingService {
       return;
     }
 
-    // Get current file size and start streaming from beginning
     try {
       const stats = await import('fs/promises').then(fs => fs.stat(download.filePath));
       const currentSize = stats.size;
@@ -217,7 +400,6 @@ export class StreamingService {
         console.error('❌ PassThrough error:', error);
       });
 
-      // Read from beginning up to current size
       console.log('📖 Reading catch-up data from 0 to', currentSize - 1);
       const currentStream = createReadStream(download.filePath, {
         start: 0,
@@ -252,14 +434,15 @@ export class StreamingService {
   private async downloadAndStream(
     song: Song,
     res: Response,
-    preferFlac: boolean
+    requestedQuality: QualityPreference
   ): Promise<void> {
-    const format = preferFlac ? 'flac,mp3' : 'mp3,flac';
+    const format = this.buildFormatPreference(requestedQuality);
     const input = formatSldlInputStr(song);
     console.log('Input:', input);
+    console.log('Format preference:', format);
 
-    // Use songId as prefix for temp files
-    const tempFilePrefix = `${song.id}-${Date.now()}`;
+    const tempFilePrefix = `${song.id}-${requestedQuality}-${Date.now()}`;
+    const cacheKey = this.getCacheKey(song.id, requestedQuality);
 
     const passThrough = new PassThrough();
 
@@ -267,35 +450,33 @@ export class StreamingService {
       process: null as any,
       activeStreams: new Set([passThrough]),
       filePath: null,
-      isComplete: false
+      isComplete: false,
+      requestedQuality: requestedQuality,
+      actualQuality: null,
     };
 
-    this.activeDownloads.set(song.id, download);
+    this.activeDownloads.set(cacheKey, download);
 
     let headersSent = false;
     let streamingStarted = false;
+    let downloadFailed = false;
 
     const cleanup = () => {
-      this.activeDownloads.delete(song.id);
+      this.activeDownloads.delete(cacheKey);
     };
 
-    // Handle client disconnect
     res.on('close', () => {
       console.log('❌ Initial client disconnected');
-      console.log('📊 Active streams before removal:', download.activeStreams.size);
       download.activeStreams.delete(passThrough);
       passThrough.end();
-      console.log('📊 Active streams after removal:', download.activeStreams.size);
 
-      // If no more clients, abort download
       if (download.activeStreams.size === 0 && !download.isComplete) {
         console.log('🛑 No more clients, aborting download');
         cleanup();
-        if (download.process) {
+        if (download.process && !download.process.killed) {
           download.process.kill('SIGTERM');
         }
 
-        // Clean up incomplete file
         if (download.filePath && existsSync(download.filePath)) {
           unlink(download.filePath).catch(err =>
             console.error('Failed to clean up incomplete file:', err)
@@ -308,7 +489,6 @@ export class StreamingService {
       console.error('❌ Response error in downloadAndStream:', error);
     });
 
-    // Helper function to find and start streaming the file
     const findFileAndStartStreaming = async () => {
       if (streamingStarted) return;
 
@@ -327,9 +507,14 @@ export class StreamingService {
 
         const filePath = path.join(this.tempDir, audioFile);
         download.filePath = filePath;
-        this.streamCache.set(song.id, filePath);
+        this.streamCache.set(cacheKey, filePath);
+
+        // CRITICAL FIX: Detect actual quality from filename
+        const ext = path.extname(audioFile).replace('.incomplete', '').toLowerCase();
+        download.actualQuality = ext === '.flac' ? 'flac' : requestedQuality;
 
         console.log('📁 FILE DETECTED:', filePath);
+        console.log('📊 Actual quality:', download.actualQuality, '(requested:', requestedQuality, ')');
 
         const stats = await import('fs/promises').then(fs => fs.stat(filePath));
         const currentSize = stats.size;
@@ -342,7 +527,6 @@ export class StreamingService {
           const mimeType = this.getMimeType(ext);
 
           console.log('✅ Starting progressive stream with', currentSize, 'bytes');
-          console.log('📊 Active streams:', download.activeStreams.size);
 
           res.writeHead(200, {
             'Content-Type': mimeType,
@@ -366,7 +550,6 @@ export class StreamingService {
       }
     };
 
-    // NOW SPAWN SLDL
     console.log('🚀 Spawning SLDL process...');
 
     const configPath = process.env.SLDL_CONFIG_PATH || '~/.config/sldl/sldl.conf';
@@ -374,6 +557,7 @@ export class StreamingService {
       input,
       '-p', this.tempDir,
       '--pref-format', format,
+     // '--format', format, // CRITICAL: Add --format to enforce strict matching
       '-c', configPath,
       '--no-progress',
       '--name-format', tempFilePrefix,
@@ -382,24 +566,34 @@ export class StreamingService {
     const sldl = spawn(process.env.SLDL_PATH || 'sldl', args);
     download.process = sldl;
 
-    // Parse SLDL output
     sldl.stdout.on('data', (data: Buffer) => {
       const output = data.toString().trim();
       console.log('SLDL stdout:', output);
 
-      // When SLDL reports download is in progress, find file and start streaming
-      if (output.includes('InProgress:') && !streamingStarted) {
-        console.log('🎯 InProgress detected! Finding file and starting stream...');
-        // Give SLDL a moment to create the file
-        setTimeout(() => {
-          findFileAndStartStreaming();
-        }, 100);
+     // if (output.includes('InProgress:') && !streamingStarted) {
+      //  console.log('🎯 InProgress detected! Finding file and starting stream...');
+      //  setTimeout(() => {
+      //    findFileAndStartStreaming();
+      //  }, 100);
+     // }
+
+      // Detect if no results were found
+      if (output.includes('NotFound') || output.includes('No results')) {
+        console.log('⚠️ No results found for requested quality');
+        downloadFailed = true;
       }
     });
 
     sldl.stderr.on('data', (data: Buffer) => {
-      console.log('SLDL stderr:', data.toString().trim());
+      const errorOutput = data.toString().trim();
+      console.error('SLDL stderr:', errorOutput);
+
+      if (errorOutput.includes('ListenException') || errorOutput.includes('port may be in use')) {
+        console.error('❌ Port conflict detected');
+        downloadFailed = true;
+      }
     });
+
 
     sldl.on('error', (error) => {
       console.error('❌ SLDL process error:', error);
@@ -418,17 +612,43 @@ export class StreamingService {
       download.isComplete = true;
       cleanup();
 
-      if (code === 0 && download.filePath) {
+      // CRITICAL FIX: Only mark as unavailable if actually failed
+      if (code === 0 && download.filePath && !downloadFailed) {
         await this.handleSuccessfulDownload(song, download);
       } else {
-        console.error('❌ SLDL exited with code:', code);
+        console.error('❌ SLDL failed with code:', code);
+
+        // Only mark unavailable if it was a true "not found", not a connection error
+        if (!downloadFailed || code === 1) {
+        const ext = requestedQuality === 'flac' ? '.flac' : '.mp3';
+        await this.markQualityUnavailable(song.id, requestedQuality, ext);
+        }
+
         if (!headersSent) {
-          res.status(404).json({ error: 'Song not found or download failed' });
+          // Try to provide fallback
+          const fallbackResult = await this.findBestAvailableQualityWithFallback(
+            song,
+            requestedQuality
+          );
+
+          if (fallbackResult && !fallbackResult.wasRequested) {
+            console.log(`📂 Providing fallback quality: ${fallbackResult.quality}`);
+            res.setHeader('X-Quality-Fallback', fallbackResult.quality);
+            res.setHeader('X-Requested-Quality', requestedQuality);
+            return this.streamFromFile(fallbackResult.path, res);
+          }
+
+          res.status(404).json({
+            error: 'Requested quality not found',
+            requestedQuality,
+            message: downloadFailed
+              ? 'Download service error. Please try again.'
+              : `The ${requestedQuality} quality is not available for this track`
+          });
         } else {
           download.activeStreams.forEach(stream => stream.end());
         }
 
-        // Clean up failed download
         if (download.filePath && existsSync(download.filePath)) {
           unlink(download.filePath).catch(err =>
             console.error('Failed to clean up failed file:', err)
@@ -437,6 +657,55 @@ export class StreamingService {
       }
     });
   }
+
+  /**
+   * Build format preference string for sldl
+   * Based on: https://github.com/fiso64/slsk-batchdl#file-conditions
+   */
+  private buildFormatPreference(quality: QualityPreference): string {
+    switch (quality) {
+      case 'flac':
+        return 'flac';
+      case '320':
+        return '320'; // Only 320, no fallback in sldl command
+      case 'v0':
+        return 'v0';
+      case '256':
+        return '256';
+      case '192':
+        return '192';
+      case '128':
+        return '128';
+      case 'standard':
+        return '320'; // Default to 320 for "standard"
+      case 'any':
+        return 'mp3';
+      default:
+        return '320';
+    }
+  }
+
+  private determineQuality(filePath: string, fileSize: number): string {
+    const ext = path.extname(filePath).toLowerCase();
+
+    if (ext === '.flac') {
+      return 'flac';
+    }
+
+    // Heuristics for MP3 quality (3-4 minute average song)
+    if (fileSize > 10 * 1024 * 1024) {
+      return '320';
+    } else if (fileSize > 7 * 1024 * 1024) {
+      return 'v0';
+    } else if (fileSize > 5 * 1024 * 1024) {
+      return '256';
+    } else if (fileSize > 3 * 1024 * 1024) {
+      return '192';
+    } else {
+      return '128';
+    }
+  }
+
   private startProgressiveTailing(
     initialFilePath: string,
     download: ActiveDownload,
@@ -461,18 +730,18 @@ export class StreamingService {
       try {
         isReading = true;
 
-        // Check if file was renamed (incomplete -> complete)
         if (currentFilePath.endsWith('.incomplete')) {
           const withoutIncomplete = currentFilePath.replace('.incomplete', '');
           if (existsSync(withoutIncomplete) && !existsSync(currentFilePath)) {
             console.log('📝 File renamed from .incomplete:', withoutIncomplete);
             currentFilePath = withoutIncomplete;
             download.filePath = currentFilePath;
-            this.streamCache.set(
-              Array.from(this.activeDownloads.entries())
-              .find(([_, d]) => d === download)?.[0] || '',
-              currentFilePath
-            );
+
+            const cacheEntry = Array.from(this.activeDownloads.entries())
+            .find(([_, d]) => d === download);
+            if (cacheEntry) {
+              this.streamCache.set(cacheEntry[0], currentFilePath);
+            }
           }
         }
 
@@ -484,7 +753,6 @@ export class StreamingService {
         const stats = await import('fs/promises').then(fs => fs.stat(currentFilePath));
         const currentSize = stats.size;
 
-        // Read new data if available
         if (currentSize > lastPosition) {
           const bytesToRead = currentSize - lastPosition;
           console.log('📖 Reading new data:', bytesToRead, 'bytes from position', lastPosition);
@@ -493,23 +761,14 @@ export class StreamingService {
           totalBytesBroadcast += chunk.length;
 
           console.log('📡 Broadcasting', chunk.length, 'bytes to', download.activeStreams.size, 'clients');
-          console.log('📊 Total bytes broadcast so far:', totalBytesBroadcast);
 
-          // Broadcast to all connected clients
           let successfulWrites = 0;
           download.activeStreams.forEach((passThrough) => {
             if (!passThrough.destroyed) {
               const written = passThrough.write(chunk);
               if (written) {
                 successfulWrites++;
-              } else {
-                console.log('⚠️ Backpressure on a client stream');
-                passThrough.once('drain', () => {
-                  console.log('💧 Stream drained for a client');
-                });
               }
-            } else {
-              console.log('⚠️ Found destroyed stream, should be cleaned up');
             }
           });
 
@@ -518,12 +777,10 @@ export class StreamingService {
           lastPosition = currentSize;
         }
 
-        // End all streams if download is finished and we've read all data
         if (download.isComplete && currentSize === lastPosition) {
           clearInterval(tailInterval);
           console.log('✅ Progressive streaming completed');
-          console.log('📊 Final stats: Total bytes broadcast:', totalBytesBroadcast);
-          console.log('📊 Ending', download.activeStreams.size, 'active streams');
+          console.log('📊 Total bytes broadcast:', totalBytesBroadcast);
           download.activeStreams.forEach(stream => {
             if (!stream.destroyed) {
               stream.end();
@@ -548,21 +805,13 @@ export class StreamingService {
     start: number,
     end: number
   ): Promise<Buffer> {
-    console.log('📚 readFileChunk:', { filePath: path.basename(filePath), start, end, size: end - start + 1 });
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       const stream = createReadStream(filePath, { start, end });
 
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-      stream.on('end', () => {
-        const buffer = Buffer.concat(chunks);
-        console.log('✅ Chunk read complete:', buffer.length, 'bytes');
-        resolve(buffer);
-      });
-      stream.on('error', (error) => {
-        console.error('❌ readFileChunk error:', error);
-        reject(error);
-      });
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', (error) => reject(error));
     });
   }
 
@@ -578,7 +827,6 @@ export class StreamingService {
         return;
       }
 
-      // If still has .incomplete, check for renamed version
       if (finalTempPath.endsWith('.incomplete')) {
         const withoutIncomplete = finalTempPath.replace('.incomplete', '');
         if (existsSync(withoutIncomplete)) {
@@ -591,34 +839,37 @@ export class StreamingService {
         return;
       }
 
-      // Wait briefly for streams to finish
       console.log('⏳ Waiting briefly for streams to complete...');
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       const stats = await import('fs/promises').then(fs => fs.stat(finalTempPath!));
       const ext = path.extname(finalTempPath).toLowerCase();
+      const quality = this.determineQuality(finalTempPath, stats.size);
 
-      // Determine quality from file
-      let quality = 'standard';
-      if (ext === '.flac') {
-        quality = 'flac';
-      } else if (stats.size > 10 * 1024 * 1024) { // > 10MB, likely 320kbps
-        quality = '320';
-      }
+      console.log(`📊 Download quality determined: ${quality}`);
 
-      // Copy to permanent storage with new name: {songId}-{quality}-{timestamp}.{ext}
       const timestamp = Date.now();
       const permanentFileName = `${song.id}-${quality}-${timestamp}${ext}`;
       const permanentPath = path.join(this.downloadsDir, permanentFileName);
 
-      // Use copyFile instead of rename to keep the temp file
       await import('fs/promises').then(fs => fs.copyFile(finalTempPath!, permanentPath));
       console.log('✅ Copied to permanent storage:', permanentPath);
 
-      // Update song in database
-      song.downloadedPath = permanentPath;
+      // Update song entity
+      if (quality === 'flac') {
+        song.flacPath = permanentPath;
+        song.hasFlac = true;
+      } else {
+        // Prioritize 320kbps for standardPath
+        if (quality === '320' || !song.standardPath) {
+          song.standardPath = permanentPath;
+          song.standardQuality = quality;
+        }
+      }
+
       song.duration = await this.extractDuration(permanentPath);
       song.metadata = {
+        ...song.metadata,
         fileSize: stats.size,
         format: ext.substring(1),
         quality,
@@ -626,12 +877,34 @@ export class StreamingService {
       };
 
       await this.songRepository.save(song);
-      console.log('✅ Database updated for song:', song.id);
+      console.log('✅ Song entity updated');
 
-      // Update cache with permanent path
-      this.streamCache.set(song.id, permanentPath);
+      // Create or update SongQuality entry
+      const existingQuality = await this.songQualityRepository.findOne({
+        where: { songId: song.id, quality }
+      });
 
-      // Clean up temp file after a delay
+      if (existingQuality) {
+        existingQuality.path = permanentPath;
+        existingQuality.extension = ext;
+        existingQuality.unavailable = false; // Mark as available now
+        await this.songQualityRepository.save(existingQuality);
+        console.log('✅ Updated existing SongQuality entry');
+      } else {
+        const songQuality = this.songQualityRepository.create({
+          songId: song.id,
+          quality,
+          path: permanentPath,
+          extension: ext,
+          unavailable: false,
+        });
+        await this.songQualityRepository.save(songQuality);
+        console.log('✅ Created new SongQuality entry');
+      }
+
+      const cacheKey = this.getCacheKey(song.id, download.requestedQuality);
+      this.streamCache.set(cacheKey, permanentPath);
+
       setTimeout(async () => {
         try {
           if (existsSync(finalTempPath!)) {
@@ -641,7 +914,7 @@ export class StreamingService {
         } catch (error) {
           console.error('Failed to clean up temp file:', error);
         }
-      }, 5000); // Wait 5 seconds before cleanup
+      }, 5000);
 
     } catch (error) {
       console.error('❌ Error handling download:', error);
@@ -663,7 +936,6 @@ export class StreamingService {
 
   private async extractDuration(filePath: string): Promise<number | null> {
     // TODO: Implement using ffprobe
-    // Example: ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 file.mp3
     return null;
   }
 

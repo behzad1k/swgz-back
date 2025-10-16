@@ -4,6 +4,7 @@ import { LibraryModule } from '../library/library.module';
 import { DiscogsService } from './discogs.service';
 import { Album } from './entities/album.entity';
 import { Artist } from './entities/artist.entity';
+import { SongQuality } from './entities/song-quality.entity';
 import { Song } from './entities/song.entity';
 import { SearchHistory } from './entities/search-history.entity';
 import { PlayHistory } from '../library/entities/play-history.entity';
@@ -15,7 +16,7 @@ import { StreamingService } from './streaming.service';
 import { SwagzModule } from '../swagz/swagz.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Song, SearchHistory, PlayHistory, Artist, Album]), SwagzModule, forwardRef(() => LibraryModule)],
+  imports: [TypeOrmModule.forFeature([Song, SearchHistory, PlayHistory, Artist, Album, SongQuality]), SwagzModule, forwardRef(() => LibraryModule)],
   controllers: [MusicController],
   providers: [MusicService, LastfmService, SlskService, StreamingService, DiscogsService],
   exports: [MusicService, SlskService],
