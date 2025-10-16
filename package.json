@@ -47,7 +47,6 @@
     "@types/nodemailer": "^7.0.2",
     "@types/passport-google-oauth20": "^2.0.16",
     "@types/passport-jwt": "^4.0.1",
-    "@types/uuid": "^11.0.0",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"

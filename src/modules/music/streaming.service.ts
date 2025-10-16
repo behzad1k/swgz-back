@@ -482,6 +482,10 @@ export class StreamingService {
         return;
       }
 
+      // **CRITICAL FIX: Set fileDetected IMMEDIATELY before any async operations**
+      fileDetected = true;
+      console.log('🔒 File detection locked');
+
       const filePath = path.join(streamDir, filename);
 
       // Wait for file to exist and have initial content
@@ -514,10 +518,10 @@ export class StreamingService {
 
       if (!fileReady) {
         console.log('❌ File never became ready with sufficient data');
+        fileDetected = false; // Reset on failure
         return;
       }
 
-      // Mark that we've detected a file to prevent duplicate processing
       fileDetected = true;
       streamingStarted = true;
 
@@ -529,6 +533,10 @@ export class StreamingService {
 
       console.log('📁 FILE DETECTED via watcher:', filePath);
       console.log('📊 Actual quality:', download.actualQuality, '(requested:', requestedQuality, ')');
+      if (headersSent) {
+        console.log('⚠️ Headers already sent, skipping');
+        return;
+      }
 
       headersSent = true;
 
