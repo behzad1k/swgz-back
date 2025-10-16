@@ -10,7 +10,7 @@ async function bootstrap() {
     origin: '*', // Allows all origins
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-    credentials: true, // Allow cookies and authentication headers
+    // credentials: true, // Allow cookies and authentication headers
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
