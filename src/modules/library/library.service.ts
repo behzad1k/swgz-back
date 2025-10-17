@@ -2,7 +2,7 @@
 // library.service.ts
 import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOneOptions, Repository } from 'typeorm';
 import { LibrarySong } from './entities/library-song.entity';
 import { User, SubscriptionPlan } from '../users/entities/user.entity';
 import { MusicService } from '../music/music.service';
@@ -33,7 +33,14 @@ export class LibraryService {
       throw new ForbiddenException('Free plan allows maximum 100 songs in library');
     }
 
-    const song = await this.musicService.getOrCreateSong(songData);
+    const options: FindOneOptions<Song> = {
+      where: { title: songData.title, artistName: songData.artistName },
+    }
+
+    if (songData.id){
+      options.where['id'] = songData.id
+    }
+    const song = await this.musicService.getOrCreateSong(songData, options);
 
     const existing = await this.librarySongRepository.findOne({
       where: { userId, songId: song.id },
@@ -140,30 +147,33 @@ export class LibraryService {
   }
 
   async toggleLike(userId: string, songId: string) {
-    const librarySong = await this.librarySongRepository.findOne({
+    let librarySong = await this.librarySongRepository.findOne({
       where: { userId, songId },
     });
 
     if (!librarySong) {
-      throw new BadRequestException('Song not in library');
+      librarySong = new LibrarySong();
+      librarySong.songId = songId;
+      librarySong.userId = userId;
+      librarySong.addedAt = new Date();
     }
 
-    const wasLiked = librarySong.isLiked;
+
     librarySong.isLiked = !librarySong.isLiked;
     await this.librarySongRepository.save(librarySong);
 
     if (librarySong.isLiked) {
       await this.songRepository.increment({ id: songId }, 'likeCount', 1);
-      await this.activityRepository.save({
-        userId,
-        type: ActivityType.LIKE,
-        songId,
-      });
-      await this.swagzService.awardSwagz(userId, SwagzAction.LIKE);
+      // await this.activityRepository.save({
+      //   userId,
+      //   type: ActivityType.LIKE,
+      //   songId,
+      // });
+      // await this.swagzService.awardSwagz(userId, SwagzAction.LIKE);
     } else {
       await this.songRepository.decrement({ id: songId }, 'likeCount', 1);
     }
 
-    return { isLiked: librarySong.isLiked };
+    return { isLiked: librarySong.isLiked, librarySong };
   }
 }

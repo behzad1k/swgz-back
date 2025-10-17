@@ -26,7 +26,7 @@ export class PlaylistService {
 
     const playlist = this.playlistRepository.create({
       userId,
-      name,
+      title: name,
       description,
       source: PlaylistSource.USER,
     });
@@ -119,7 +119,7 @@ export class PlaylistService {
       throw new NotFoundException('Playlist not found');
     }
 
-    playlist.name = name || playlist.name;
+    playlist.title = name || playlist.title;
     playlist.description = description || playlist.description;
 
     return this.playlistRepository.save(playlist);

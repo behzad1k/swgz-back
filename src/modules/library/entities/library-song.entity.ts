@@ -7,16 +7,8 @@ export class LibrarySong {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => User, user => user.librarySongs, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'userId' })
-  user: User;
-
   @Column()
   userId: string;
-
-  @ManyToOne(() => Song, song => song.librarySongs, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'songId' })
-  song: Song;
 
   @Column()
   songId: string;
@@ -29,4 +21,14 @@ export class LibrarySong {
 
   @CreateDateColumn()
   addedAt: Date;
+
+  @ManyToOne(() => User, user => user.librarySongs, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'userId' })
+  user: User;
+
+
+  @ManyToOne(() => Song, song => song.librarySongs, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'songId' })
+  song: Song;
+
 }

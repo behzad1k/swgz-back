@@ -1,4 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import { Song } from '../../music/entities/song.entity';
 import { Playlist } from './playlist.entity';
 
 @Entity('playlist_songs')
@@ -13,7 +14,7 @@ export class PlaylistSong {
   @Column()
   playlistId: string;
 
-  @ManyToOne(() => require('../../music/entities/song.entity').Song, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Song, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'songId' })
   song: any;
 

@@ -14,7 +14,7 @@ export class Playlist {
   id: string;
 
   @Column()
-  name: string;
+  title: string;
 
   @Column({ nullable: true })
   description: string;

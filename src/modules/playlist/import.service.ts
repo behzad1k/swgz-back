@@ -106,7 +106,7 @@ export class ImportService {
 
     const playlist = this.playlistRepository.create({
       userId,
-      name: playlistName,
+      title: playlistName,
       source,
       externalId,
       isEditable: true,
