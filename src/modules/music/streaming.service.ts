@@ -49,6 +49,9 @@ export class StreamingService {
     'standard': ['320', 'v0', '256', '192', '128'],
   };
 
+  // Define the order from lowest to highest quality
+  private readonly QUALITY_ORDER = ['128', '192', '256', 'v0', '320', 'flac'];
+
   constructor(
     @InjectRepository(Song)
     private songRepository: Repository<Song>,
@@ -72,6 +75,52 @@ export class StreamingService {
 
   private getCacheKey(songId: string, quality: QualityPreference): string {
     return `${songId}-${quality}`;
+  }
+
+  /**
+   * Find the lowest available quality for instant playback
+   */
+  private async findLowestAvailableQuality(song: Song): Promise<QualityFallbackResult | null> {
+    console.log('🔍 Searching for lowest available quality...');
+
+    // Check standardPath first
+    if (song.standardPath && song.standardQuality && existsSync(song.standardPath)) {
+      console.log(`✅ Found standard quality: ${song.standardQuality}`);
+      return {
+        quality: song.standardQuality,
+        path: song.standardPath,
+        wasRequested: false
+      };
+    }
+
+    // Check flacPath
+    if (song.flacPath && existsSync(song.flacPath)) {
+      console.log('✅ Found FLAC quality');
+      return {
+        quality: 'flac',
+        path: song.flacPath,
+        wasRequested: false
+      };
+    }
+
+    // Check all quality entries in order from lowest to highest
+    for (const quality of this.QUALITY_ORDER) {
+      const songQuality = await this.songQualityRepository.findOne({
+        where: { songId: song.id, quality, unavailable: false }
+      });
+
+      if (songQuality && songQuality.path && existsSync(songQuality.path)) {
+        console.log(`✅ Found quality: ${quality}`);
+        return {
+          quality,
+          path: songQuality.path,
+          wasRequested: false
+        };
+      }
+    }
+
+    console.log('❌ No available qualities found');
+    return null;
   }
 
   private async findBestAvailableQualityWithFallback(
@@ -147,7 +196,7 @@ export class StreamingService {
   async streamSong(
     songId: string,
     res: Response,
-    quality: QualityPreference = '320'
+    quality?: QualityPreference
   ): Promise<void> {
     const song = await this.songRepository.findOne({
       where: { id: songId },
@@ -158,6 +207,25 @@ export class StreamingService {
       throw new NotFoundException('Song not found');
     }
 
+    // NEW LOGIC: If no quality specified, find and play lowest available
+    if (!quality) {
+      console.log('🎵 No quality specified, searching for lowest available quality...');
+
+      const lowestQuality = await this.findLowestAvailableQuality(song);
+
+      if (lowestQuality) {
+        console.log(`📂 Playing lowest available quality: ${lowestQuality.quality}`);
+        res.setHeader('X-Actual-Quality', lowestQuality.quality);
+        res.setHeader('X-Auto-Selected', 'true');
+        return this.streamFromFile(lowestQuality.path, res);
+      }
+
+      // No qualities available at all, default to downloading standard quality
+      console.log('⬇️ No qualities available, defaulting to 320 download');
+      quality = '320';
+    }
+
+    // Rest of the existing logic for when quality IS specified
     const isUnavailable = await this.isQualityUnavailable(songId, quality);
     const qualityResult = await this.findBestAvailableQualityWithFallback(song, quality);
 
@@ -381,7 +449,6 @@ export class StreamingService {
     const streamDir = path.join(this.tempDir, streamDirName);
     const cacheKey = this.getCacheKey(song.id, requestedQuality);
 
-    // Create dedicated directory for this stream
     await mkdir(streamDir, { recursive: true });
     console.log('📁 Created stream directory:', streamDir);
 
@@ -404,10 +471,9 @@ export class StreamingService {
     let headersSent = false;
     let streamingStarted = false;
     let downloadFailed = false;
-    let fileDetected = false; // Track if we've already detected a file
+    let fileDetected = false;
 
     const cleanup = async () => {
-      // Stop file watcher
       if (download.watcher) {
         download.watcher.close();
         download.watcher = null;
@@ -425,7 +491,6 @@ export class StreamingService {
       if (download.activeStreams.size === 0 && !download.isComplete) {
         console.log('🛑 No more clients, aborting download');
 
-        // Kill the SLDL process if it's still running
         if (download.process && !download.process.killed) {
           download.process.kill('SIGTERM');
           console.log('🛑 Killed SLDL process');
@@ -433,7 +498,6 @@ export class StreamingService {
 
         cleanup();
 
-        // Clean up incomplete files and directory
         setTimeout(async () => {
           try {
             const files = await readdir(streamDir);
@@ -453,14 +517,11 @@ export class StreamingService {
       console.error('❌ Response error in downloadAndStream:', error);
     });
 
-    // Set up file watcher for the stream directory
     download.watcher = watch(streamDir, { persistent: false }, async (eventType, filename) => {
-      // Ignore if we've already detected and started streaming a file
       if (!filename || fileDetected) return;
 
       console.log(`👁️ File watcher event: ${eventType} - ${filename}`);
 
-      // Ignore directory itself
       if (filename === streamDirName) {
         console.log('⏭️ Skipping directory event');
         return;
@@ -476,21 +537,18 @@ export class StreamingService {
         return;
       }
 
-      // Only process .incomplete files on first detection
       if (!filename.endsWith('.incomplete')) {
         console.log('⏭️ Skipping final file (already processed incomplete):', filename);
         return;
       }
 
-      // **CRITICAL FIX: Set fileDetected IMMEDIATELY before any async operations**
       fileDetected = true;
       console.log('🔒 File detection locked');
 
       const filePath = path.join(streamDir, filename);
 
-      // Wait for file to exist and have initial content
       let attempts = 0;
-      const maxAttempts = 50; // 5 seconds max wait
+      const maxAttempts = 50;
       let fileReady = false;
 
       while (attempts < maxAttempts && !fileReady) {
@@ -503,7 +561,6 @@ export class StreamingService {
 
         try {
           const stats = await import('fs/promises').then(fs => fs.stat(filePath));
-          // Wait for at least 64KB of data before starting stream
           if (stats.size >= 65536) {
             fileReady = true;
             console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 100}ms`);
@@ -518,7 +575,7 @@ export class StreamingService {
 
       if (!fileReady) {
         console.log('❌ File never became ready with sufficient data');
-        fileDetected = false; // Reset on failure
+        fileDetected = false;
         return;
       }
 
@@ -565,7 +622,6 @@ export class StreamingService {
 
     console.log('👁️ File watcher started for:', streamDir);
 
-    // Execute SLDL directly
     const configPath = process.env.SLDL_CONFIG_PATH || '~/.config/sldl/sldl.conf';
     const args = [
       input,
@@ -587,7 +643,6 @@ export class StreamingService {
     console.log('🚀 Spawning SLDL process directly');
     console.log('📋 SLDL command:', sldlPath, args.join(' '));
 
-    // Spawn SLDL directly using setImmediate to avoid blocking
     setImmediate(async () => {
       const { spawn } = await import('child_process');
       const sldl = spawn(sldlPath, args);
@@ -631,11 +686,9 @@ export class StreamingService {
         console.log('SLDL process closed with code:', code);
         download.isComplete = true;
 
-        // Give file watcher a moment to detect any final file changes
         await new Promise(resolve => setTimeout(resolve, 500));
 
         if (code === 0 && download.filePath && !downloadFailed) {
-          // Update filePath to non-.incomplete version if it was renamed
           if (download.filePath.endsWith('.incomplete')) {
             const withoutIncomplete = download.filePath.replace('.incomplete', '');
             if (existsSync(withoutIncomplete)) {
@@ -686,7 +739,6 @@ export class StreamingService {
           }
         }
 
-        // Clean up directory
         await cleanup();
         setTimeout(async () => {
           try {
@@ -699,6 +751,7 @@ export class StreamingService {
       });
     });
   }
+
   private determineQuality(filePath: string, fileSize: number): string {
     const ext = path.extname(filePath).toLowerCase();
 
@@ -743,7 +796,6 @@ export class StreamingService {
       try {
         isReading = true;
 
-        // Handle file rename from .incomplete to final name
         if (currentFilePath.endsWith('.incomplete')) {
           const withoutIncomplete = currentFilePath.replace('.incomplete', '');
           if (existsSync(withoutIncomplete) && !existsSync(currentFilePath)) {
@@ -762,7 +814,6 @@ export class StreamingService {
         if (!existsSync(currentFilePath)) {
           console.log('⚠️ File no longer exists, checking for renamed version');
 
-          // Check if file was renamed
           if (currentFilePath.endsWith('.incomplete')) {
             const withoutIncomplete = currentFilePath.replace('.incomplete', '');
             if (existsSync(withoutIncomplete)) {
@@ -815,8 +866,6 @@ export class StreamingService {
             }
           });
         }
-        
-
 
         isReading = false;
       } catch (error) {
@@ -829,6 +878,7 @@ export class StreamingService {
       }
     }, 150);
   }
+
   private async readFileChunk(
     filePath: string,
     start: number,
@@ -939,7 +989,6 @@ export class StreamingService {
             await unlink(finalTempPath!);
             console.log('🧹 Cleaned up temp file:', finalTempPath);
           }
-          // Clean up stream directory
           if (existsSync(download.streamDir)) {
             await rmdir(download.streamDir, { recursive: true });
             console.log('🧹 Cleaned up stream directory:', download.streamDir);

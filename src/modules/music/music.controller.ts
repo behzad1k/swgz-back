@@ -34,9 +34,9 @@ export class MusicController {
   @Get('stream/:id')
   async streamSong(
     @Param('id') songId: string,
-    @Query('quality') quality: QualityPreference,
     @CurrentUser() user: User,
     @Res() res: Response,
+    @Query('quality') quality?: QualityPreference,
   ) {
     // Only premium users can stream FLAC
     if (quality == 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
