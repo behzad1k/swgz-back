@@ -39,14 +39,15 @@ export class MusicController {
     @Query('quality') quality?: QualityPreference,
   ) {
     // Only premium users can stream FLAC
-    if (quality == 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
+    if (quality === 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
       return res.status(403).json({
         error: 'FLAC streaming requires premium subscription',
         requestedQuality: 'flac',
       });
     }
-    // Handle GET request - normal streaming
-    await this.streamingService.streamSong(songId, res, quality);
+
+    // Pass user's subscription plan to streaming service
+    await this.streamingService.streamSong(songId, res, quality, user.subscriptionPlan);
   }
 
   @Get('recent-searches')
@@ -61,7 +62,7 @@ export class MusicController {
 
   @Get('artist/:id')
   async getArtist(@Param('id') artistId: string) {
-    if (!artistId) throw new NotFoundException("Artist not found");
+    if (!artistId) throw new NotFoundException('Artist not found');
     return this.musicService.fetchArtistInfo(artistId);
   }
 
@@ -89,11 +90,6 @@ export class MusicController {
     @Param('id') songId: string,
     @Param('quality') quality: string,
   ) {
-    await this.musicService.resetUnavailableQuality(songId, quality);
-    return {
-      message: `Reset unavailable flag for ${quality} quality`,
-      songId,
-      quality,
-    };
+    return this.musicService.resetUnavailableQuality(songId, quality);
   }
 }

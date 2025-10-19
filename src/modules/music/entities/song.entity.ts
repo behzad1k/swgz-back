@@ -3,7 +3,6 @@ import { LibrarySong } from '../../library/entities/library-song.entity';
 import { PlaylistSong } from '../../playlist/entities/playlist-song.entity';
 import { Artist } from './artist.entity';
 import { PlayHistory } from '../../library/entities/play-history.entity';
-import { SongQuality } from './song-quality.entity';
 
 @Entity('songs')
 export class Song {
@@ -87,9 +86,6 @@ export class Song {
 
   @OneToMany(() => PlayHistory, playHistory => playHistory.song)
   playHistory: PlayHistory[];
-
-  @OneToMany(() => SongQuality, songQuality => songQuality.song)
-  qualities: SongQuality[];
 
   @ManyToOne(() => Artist, artist => artist.songs, { nullable: true, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'artistId' })

@@ -8,27 +8,22 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QualityPreference } from '../../types';
 import { formatSldlInputStr } from '../../utils/formatter';
-import { CronService } from '../cronjob/cronjob.service';
 import { Song } from './entities/song.entity';
-import { SongQuality } from './entities/song-quality.entity';
 import { PassThrough } from 'stream';
+import { SubscriptionPlan } from '../users/entities/user.entity';
+
+type QualityPreferenceOrUnrestricted = QualityPreference | 'unrestricted';
 
 interface ActiveDownload {
   process: ChildProcess | null;
   activeStreams: Set<PassThrough>;
   filePath: string | null;
   isComplete: boolean;
-  requestedQuality: QualityPreference;
+  requestedQuality: QualityPreferenceOrUnrestricted;
   actualQuality: string | null;
   streamDir: string;
   watcher: FSWatcher | null;
   jobName: string;
-}
-
-interface QualityFallbackResult {
-  quality: string;
-  path: string;
-  wasRequested: boolean;
 }
 
 @Injectable()
@@ -49,15 +44,11 @@ export class StreamingService {
     'standard': ['320', 'v0', '256', '192', '128'],
   };
 
-  // Define the order from lowest to highest quality
   private readonly QUALITY_ORDER = ['128', '192', '256', 'v0', '320', 'flac'];
 
   constructor(
     @InjectRepository(Song)
     private songRepository: Repository<Song>,
-    @InjectRepository(SongQuality)
-    private songQualityRepository: Repository<SongQuality>,
-    private cronService: CronService,
   ) {
     this.tempDir = process.env.STREAM_TEMP_DIR || path.join(process.cwd(), 'temp', 'streams');
     this.downloadsDir = process.env.DOWNLOADS_DIR || path.join(process.cwd(), 'downloads');
@@ -73,234 +64,155 @@ export class StreamingService {
     }
   }
 
-  private getCacheKey(songId: string, quality: QualityPreference): string {
+  private getCacheKey(songId: string, quality: QualityPreferenceOrUnrestricted): string {
     return `${songId}-${quality}`;
   }
 
-  /**
-   * Find the lowest available quality for instant playback
-   */
-  private async findLowestAvailableQuality(song: Song): Promise<QualityFallbackResult | null> {
-    console.log('🔍 Searching for lowest available quality...');
-
-    // Check standardPath first
-    if (song.standardPath && song.standardQuality && existsSync(song.standardPath)) {
-      console.log(`✅ Found standard quality: ${song.standardQuality}`);
-      return {
-        quality: song.standardQuality,
-        path: song.standardPath,
-        wasRequested: false
-      };
-    }
-
-    // Check flacPath
-    if (song.flacPath && existsSync(song.flacPath)) {
-      console.log('✅ Found FLAC quality');
-      return {
-        quality: 'flac',
-        path: song.flacPath,
-        wasRequested: false
-      };
-    }
-
-    // Check all quality entries in order from lowest to highest
-    for (const quality of this.QUALITY_ORDER) {
-      const songQuality = await this.songQualityRepository.findOne({
-        where: { songId: song.id, quality, unavailable: false }
-      });
-
-      if (songQuality && songQuality.path && existsSync(songQuality.path)) {
-        console.log(`✅ Found quality: ${quality}`);
-        return {
-          quality,
-          path: songQuality.path,
-          wasRequested: false
-        };
-      }
-    }
-
-    console.log('❌ No available qualities found');
-    return null;
-  }
-
-  private async findBestAvailableQualityWithFallback(
-    song: Song,
-    requestedQuality: QualityPreference
-  ): Promise<QualityFallbackResult | null> {
-    const priorityList = this.QUALITY_HIERARCHY[requestedQuality] || ['320', 'v0', '256', '192'];
-
-    if (requestedQuality === 'flac') {
-      if (song.flacPath && existsSync(song.flacPath)) {
-        return { quality: 'flac', path: song.flacPath, wasRequested: true };
-      }
-
-      const flacQuality = await this.songQualityRepository.findOne({
-        where: { songId: song.id, quality: 'flac', unavailable: false }
-      });
-      if (flacQuality && existsSync(flacQuality.path)) {
-        return { quality: 'flac', path: flacQuality.path, wasRequested: true };
-      }
-
-      return null;
-    }
-
-    for (const quality of priorityList) {
-      const wasRequested = quality === requestedQuality;
-
-      if (song.standardPath && song.standardQuality === quality && existsSync(song.standardPath)) {
-        return { quality, path: song.standardPath, wasRequested };
-      }
-
-      const songQuality = await this.songQualityRepository.findOne({
-        where: { songId: song.id, quality, unavailable: false }
-      });
-
-      if (songQuality && existsSync(songQuality.path)) {
-        return { quality, path: songQuality.path, wasRequested };
-      }
-    }
-
-    return null;
-  }
-
-  private async isQualityUnavailable(songId: string, quality: string): Promise<boolean> {
-    const songQuality = await this.songQualityRepository.findOne({
-      where: { songId, quality, unavailable: true }
-    });
-    return !!songQuality;
-  }
-
-  private async markQualityUnavailable(songId: string, quality: string, extension: string = '.mp3'): Promise<void> {
-    const existing = await this.songQualityRepository.findOne({
-      where: { songId, quality }
-    });
-
-    if (existing) {
-      existing.unavailable = true;
-      await this.songQualityRepository.update({ id: songId, quality }, { unavailable: true });
-    } else {
-      const songQuality = this.songQualityRepository.create({
-        songId,
-        quality,
-        path: null,
-        extension,
-        unavailable: true,
-        size: 0
-      });
-      await this.songQualityRepository.save(songQuality);
-    }
-
-    console.log(`❌ Marked quality ${quality} as unavailable for song ${songId}`);
+  private compareQuality(quality1: string, quality2: string): number {
+    const index1 = this.QUALITY_ORDER.indexOf(quality1);
+    const index2 = this.QUALITY_ORDER.indexOf(quality2);
+    return index1 - index2;
   }
 
   async streamSong(
     songId: string,
     res: Response,
-    quality?: QualityPreference
+    quality?: QualityPreference,
+    userSubscriptionPlan?: SubscriptionPlan
   ): Promise<void> {
+    // Reload song from database to get latest quality flags
     const song = await this.songRepository.findOne({
-      where: { id: songId },
-      relations: ['qualities']
+      where: { id: songId }
     });
 
     if (!song) {
       throw new NotFoundException('Song not found');
     }
 
-    // NEW LOGIC: If no quality specified, find and play lowest available
-    if (!quality) {
-      console.log('🎵 No quality specified, searching for lowest available quality...');
+    // Case 1: Quality specified by user
+    if (quality) {
+      return this.handleQualityRequest(song, res, quality);
+    }
 
-      const lowestQuality = await this.findLowestAvailableQuality(song);
+    // Case 2: No quality specified - auto-select best available
+    console.log('🎵 No quality specified, auto-selecting best available quality...');
 
-      if (lowestQuality) {
-        console.log(`📂 Playing lowest available quality: ${lowestQuality.quality}`);
-        res.setHeader('X-Actual-Quality', lowestQuality.quality);
+    // Check if we have standardPath available
+    if (song.standardPath && existsSync(song.standardPath)) {
+      console.log(`📂 Playing standard quality: ${song.standardQuality}`);
+      res.setHeader('X-Actual-Quality', song.standardQuality);
+      res.setHeader('X-Auto-Selected', 'true');
+      return this.streamFromFile(song.standardPath, res);
+    }
+
+    // Check if we have flacPath available and user is premium
+    if (song.flacPath && existsSync(song.flacPath)) {
+      if (userSubscriptionPlan === SubscriptionPlan.PREMIUM) {
+        console.log('📂 Playing FLAC quality for premium user');
+        res.setHeader('X-Actual-Quality', 'flac');
         res.setHeader('X-Auto-Selected', 'true');
-        return this.streamFromFile(lowestQuality.path, res);
-      }
-
-      // No qualities available at all, default to downloading standard quality
-      console.log('⬇️ No qualities available, defaulting to 320 download');
-      quality = '320';
-    }
-
-    // Rest of the existing logic for when quality IS specified
-    const isUnavailable = await this.isQualityUnavailable(songId, quality);
-    const qualityResult = await this.findBestAvailableQualityWithFallback(song, quality);
-
-    if (isUnavailable && qualityResult) {
-      if (!qualityResult.wasRequested) {
-        console.log(`⚠️ Requested quality ${quality} not available, using fallback: ${qualityResult.quality}`);
-        res.setHeader('X-Quality-Fallback', qualityResult.quality);
-        res.setHeader('X-Requested-Quality', quality);
-      }
-
-      console.log(`📂 Streaming from downloaded file (${qualityResult.quality}):`, qualityResult.path);
-      return this.streamFromFile(qualityResult.path, res);
-    }
-
-    if (isUnavailable) {
-      console.log(`⚠️ Requested quality ${quality} is marked unavailable, trying fallback`);
-      const fallbackQualities = this.QUALITY_HIERARCHY[quality]?.slice(1) || [];
-
-      for (const fallbackQuality of fallbackQualities) {
-        const fallbackResult = await this.findBestAvailableQualityWithFallback(song, fallbackQuality as QualityPreference);
-        if (fallbackResult) {
-          res.setHeader('X-Quality-Fallback', fallbackResult.quality);
-          res.setHeader('X-Requested-Quality', quality);
-          console.log(`📂 Using fallback quality ${fallbackResult.quality}`);
-          return this.streamFromFile(fallbackResult.path, res);
-        }
+        return this.streamFromFile(song.flacPath, res);
       }
     }
 
-    const cacheKey = this.getCacheKey(songId, quality);
-    const cachedPath = this.streamCache.get(cacheKey);
-    if (cachedPath && existsSync(cachedPath)) {
-      console.log('💾 Streaming from cached temp file:', cachedPath);
-      return this.streamFromFile(cachedPath, res);
+    // No cached paths available
+    if (song.standardQuality) {
+      // Check if there's a possible lower quality than standardQuality
+      const standardQualityIndex = this.QUALITY_ORDER.indexOf(song.standardQuality);
+
+      if (standardQualityIndex > 0) {
+        // There are lower qualities to try
+        const lowerQuality = this.QUALITY_ORDER[standardQualityIndex - 1];
+        console.log(`⬇️ Trying lower quality ${lowerQuality} (standardQuality is ${song.standardQuality})`);
+        return this.handleQualityRequest(song, res, lowerQuality as QualityPreference);
+      } else if (song.standardQuality === '128') {
+        // Already marked as unavailable on sldl
+        throw new NotFoundException('This track is not available on any quality');
+      }
     }
 
-    const existingDownload = this.activeDownloads.get(cacheKey);
-    if (existingDownload) {
-      if (existingDownload.filePath) {
-        console.log('♻️ Joining existing download');
-        return this.joinExistingDownload(existingDownload, res);
+    // First, try downloading 320kbps quality
+    console.log('⬇️ No previous downloads, trying 320kbps first');
+    await this.downloadAndStream(song, res, '320');
+    return;
+  }
+
+  private async handleQualityRequest(
+    song: Song,
+    res: Response,
+    requestedQuality: QualityPreference
+  ): Promise<void> {
+    console.log(`🎯 Handling quality request: ${requestedQuality}`);
+
+    // Check if requesting FLAC
+    if (requestedQuality === 'flac') {
+      if (song.flacPath && existsSync(song.flacPath)) {
+        console.log('📂 Streaming FLAC from cache');
+        res.setHeader('X-Actual-Quality', 'flac');
+        return this.streamFromFile(song.flacPath, res);
+      }
+
+      // Check if we've searched for FLAC before and it wasn't found
+      if (song.hasFlac === false) {
+        throw new NotFoundException('FLAC quality is not available for this track');
+      }
+
+      // Haven't searched for FLAC yet, try downloading
+      console.log('⬇️ FLAC not cached, attempting download');
+      await this.downloadAndStream(song, res, requestedQuality);
+      return;
+    }
+
+    // Requesting standard quality (320, v0, 256, 192, 128)
+    if (song.standardPath && existsSync(song.standardPath)) {
+      if (song.standardQuality === requestedQuality) {
+        // Exact match
+        console.log(`📂 Streaming exact quality match: ${requestedQuality}`);
+        res.setHeader('X-Actual-Quality', song.standardQuality);
+        return this.streamFromFile(song.standardPath, res);
       } else {
-        console.log('⏳ Download in progress, waiting...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        if (existingDownload.filePath) {
-          return this.joinExistingDownload(existingDownload, res);
+        // We have a different quality cached
+        console.log(`📂 Using cached quality ${song.standardQuality} instead of requested ${requestedQuality}`);
+        res.setHeader('X-Actual-Quality', song.standardQuality);
+        res.setHeader('X-Quality-Fallback', song.standardQuality);
+        res.setHeader('X-Requested-Quality', requestedQuality);
+        return this.streamFromFile(song.standardPath, res);
+      }
+    }
+
+    // No standardPath available
+    if (song.standardQuality === requestedQuality) {
+      // We've searched for this quality before but didn't find it
+      console.log(`⚠️ Quality ${requestedQuality} previously searched but not found`);
+
+      // Try fallback qualities
+      const fallbackQualities = this.QUALITY_HIERARCHY[requestedQuality]?.slice(1) || [];
+      for (const fallbackQuality of fallbackQualities) {
+        console.log(`🔄 Trying fallback quality: ${fallbackQuality}`);
+
+        if (song.standardQuality !== fallbackQuality) {
+          await this.downloadAndStream(song, res, fallbackQuality as QualityPreference);
+          return;
         }
       }
+
+      // If all fallback qualities failed, try unrestricted as last resort
+      console.log('🔄 All standard qualities failed, trying unrestricted search as last resort');
+      await this.downloadAndStream(song, res, 'unrestricted');
+      return;
     }
 
-    const lockKey = `${songId}-${quality}`;
-
-    if (this.downloadLocks.has(lockKey)) {
-      console.log('🔒 Download already starting, waiting for lock...');
-      await this.downloadLocks.get(lockKey);
-
-      const qualityResultAfterLock = await this.findBestAvailableQualityWithFallback(song, quality);
-      if (qualityResultAfterLock) {
-        return this.streamFromFile(qualityResultAfterLock.path, res);
-      }
+    // Check if standardQuality is higher than requested
+    if (song.standardQuality && this.compareQuality(song.standardQuality, requestedQuality) > 0) {
+      // standardQuality is higher, so we haven't searched for requested quality yet
+      console.log(`⬇️ Downloading requested quality ${requestedQuality} (standardQuality is higher: ${song.standardQuality})`);
+      await this.downloadAndStream(song, res, requestedQuality);
+      return;
     }
 
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>(resolve => {
-      releaseLock = resolve;
-    });
-    this.downloadLocks.set(lockKey, lockPromise);
-
-    try {
-      console.log(`⬇️ Starting new download: ${song.title} - ${song.artistName} (${quality})`);
-      await this.downloadAndStream(song, res, quality);
-    } finally {
-      releaseLock!();
-      this.downloadLocks.delete(lockKey);
-    }
+    // standardQuality is null or lower than requested, search for requested quality
+    console.log(`⬇️ Downloading requested quality ${requestedQuality}`);
+    await this.downloadAndStream(song, res, requestedQuality);
   }
 
   private async streamFromFile(filePath: string, res: Response): Promise<void> {
@@ -439,7 +351,7 @@ export class StreamingService {
   private async downloadAndStream(
     song: Song,
     res: Response,
-    requestedQuality: QualityPreference
+    requestedQuality: QualityPreferenceOrUnrestricted
   ): Promise<void> {
     const input = formatSldlInputStr(song);
     console.log('Input:', input);
@@ -471,6 +383,7 @@ export class StreamingService {
     let headersSent = false;
     let streamingStarted = false;
     let downloadFailed = false;
+    let notFound = false;
     let fileDetected = false;
 
     const cleanup = async () => {
@@ -548,11 +461,11 @@ export class StreamingService {
       const filePath = path.join(streamDir, filename);
 
       let attempts = 0;
-      const maxAttempts = 50;
+      const maxAttempts = 100;
       let fileReady = false;
 
       while (attempts < maxAttempts && !fileReady) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 300));
 
         if (!existsSync(filePath)) {
           attempts++;
@@ -563,7 +476,7 @@ export class StreamingService {
           const stats = await import('fs/promises').then(fs => fs.stat(filePath));
           if (stats.size >= 65536) {
             fileReady = true;
-            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 100}ms`);
+            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 300}ms`);
           } else {
             console.log(`⏳ File has ${stats.size} bytes, waiting for more...`);
             attempts++;
@@ -609,6 +522,7 @@ export class StreamingService {
         'Connection': 'keep-alive',
       });
 
+
       console.log('✅ Headers sent');
       passThrough.pipe(res);
 
@@ -630,12 +544,18 @@ export class StreamingService {
       '--no-progress',
     ];
 
-    if (requestedQuality == 'flac') {
-      args.push('--format', 'flac');
-      args.push('--pref-min-bitrate', '500');
-    } else {
-      args.push('--pref-min-bitrate', (parseInt(requestedQuality) - 20).toString());
-      args.push('--pref-max-bitrate', (parseInt(requestedQuality) + 20).toString());
+    // Only add quality filters if not unrestricted
+    if (requestedQuality !== 'unrestricted') {
+      if (requestedQuality === 'flac') {
+        args.push('--format', 'flac');
+        args.push('--pref-min-bitrate', '500');
+      } else {
+        const qualityNum = parseInt(requestedQuality);
+        if (!isNaN(qualityNum)) {
+          args.push('--pref-min-bitrate', (qualityNum - 20).toString());
+          args.push('--pref-max-bitrate', (qualityNum + 20).toString());
+        }
+      }
     }
 
     const sldlPath = process.env.SLDL_PATH || 'sldl';
@@ -653,10 +573,12 @@ export class StreamingService {
       sldl.stdout.on('data', (data: Buffer) => {
         const output = data.toString().trim();
         console.log('SLDL stdout:', output);
-
-        if (output.includes('NotFound') || output.includes('No results')) {
-          console.log('⚠️ No results found for requested quality');
-          downloadFailed = true;
+        if (output.includes('Login failed definitively for bhzd1k')) {
+          console.log('banned');
+        }
+        if (output.toLowerCase().includes('not found')) {
+          console.log('⚠️ Track not found on sldl');
+          notFound = true;
         }
       });
 
@@ -688,7 +610,11 @@ export class StreamingService {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        if (code === 0 && download.filePath && !downloadFailed) {
+        // If code is 0 but notFound is true, it means track wasn't found
+        // If code is 0 and download.filePath exists, it's a success
+        const isSuccess = code === 0 && download.filePath && !notFound;
+
+        if (isSuccess) {
           if (download.filePath.endsWith('.incomplete')) {
             const withoutIncomplete = download.filePath.replace('.incomplete', '');
             if (existsSync(withoutIncomplete)) {
@@ -700,33 +626,36 @@ export class StreamingService {
 
           await this.handleSuccessfulDownload(song, download);
         } else {
-          console.error('❌ SLDL failed with code:', code);
+          console.error('❌ SLDL failed - code:', code, 'notFound:', notFound, 'hasFile:', !!download.filePath);
 
-          if (!downloadFailed || code === 1) {
-            const ext = requestedQuality === 'flac' ? '.flac' : '.mp3';
-            await this.markQualityUnavailable(song.id, requestedQuality, ext);
+          // Only mark quality as unavailable if "Not found" was in stdout
+          if (notFound) {
+            if (requestedQuality === 'flac') {
+              song.hasFlac = false;
+              await this.songRepository.save(song);
+              console.log('❌ Marked FLAC as unavailable');
+            } else if (requestedQuality !== 'unrestricted') {
+              // Update standardQuality to mark this quality as searched but not found
+              if (!song.standardQuality || this.compareQuality(requestedQuality as QualityPreference, song.standardQuality) < 0) {
+                song.standardQuality = requestedQuality as QualityPreference;
+                await this.songRepository.save(song);
+                console.log(`❌ Marked ${requestedQuality} as unavailable, set standardQuality to ${requestedQuality}`);
+              }
+            } else {
+              // Unrestricted search failed, mark as completely unavailable
+              song.standardQuality = '128';
+              await this.songRepository.save(song);
+              console.log('❌ Marked track as completely unavailable (standardQuality = 128)');
+            }
           }
 
           if (!headersSent) {
-            const fallbackResult = await this.findBestAvailableQualityWithFallback(
-              song,
-              requestedQuality
-            );
-
-            if (fallbackResult && !fallbackResult.wasRequested) {
-              console.log(`📂 Providing fallback quality: ${fallbackResult.quality}`);
-              res.setHeader('X-Quality-Fallback', fallbackResult.quality);
-              res.setHeader('X-Requested-Quality', requestedQuality);
-              await cleanup();
-              return this.streamFromFile(fallbackResult.path, res);
-            }
-
             res.status(404).json({
               error: 'Requested quality not found',
               requestedQuality,
-              message: downloadFailed
-                ? 'Download service error. Please try again.'
-                : `The ${requestedQuality} quality is not available for this track`
+              message: notFound
+                ? `The ${requestedQuality} quality is not available for this track`
+                : 'Download service error. Please try again.'
             });
           } else {
             download.activeStreams.forEach(stream => stream.end());
@@ -938,10 +867,8 @@ export class StreamingService {
         song.flacPath = permanentPath;
         song.hasFlac = true;
       } else {
-        if (quality === '320' || !song.standardPath) {
-          song.standardPath = permanentPath;
-          song.standardQuality = quality;
-        }
+        song.standardPath = permanentPath;
+        song.standardQuality = quality;
       }
 
       song.duration = await this.extractDuration(permanentPath);
@@ -955,30 +882,6 @@ export class StreamingService {
 
       await this.songRepository.save(song);
       console.log('✅ Song entity updated');
-
-      const existingQuality = await this.songQualityRepository.findOne({
-        where: { songId: song.id, quality }
-      });
-
-      if (existingQuality) {
-        existingQuality.path = permanentPath;
-        existingQuality.extension = ext;
-        existingQuality.unavailable = false;
-        existingQuality.size = stats.size;
-        await this.songQualityRepository.save(existingQuality);
-        console.log('✅ Updated existing SongQuality entry');
-      } else {
-        const songQuality = this.songQualityRepository.create({
-          songId: song.id,
-          quality,
-          path: permanentPath,
-          extension: ext,
-          unavailable: false,
-          size: stats.size
-        });
-        await this.songQualityRepository.save(songQuality);
-        console.log('✅ Created new SongQuality entry');
-      }
 
       const cacheKey = this.getCacheKey(song.id, download.requestedQuality);
       this.streamCache.set(cacheKey, permanentPath);
