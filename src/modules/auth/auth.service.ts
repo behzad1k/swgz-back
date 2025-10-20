@@ -82,6 +82,7 @@ export class AuthService {
         email: user.email,
         role: user.role,
         subscriptionPlan: user.subscriptionPlan,
+        apiKey: user.apiKey,
       },
     };
   }
