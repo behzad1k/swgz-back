@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -37,6 +39,10 @@ import { SwagzModule } from './modules/swagz/swagz.module';
     ProfileModule,
     SwagzModule,
     CronModule,
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'downloads'),
+      serveRoot: '/static-downloads',
+    }),
   ],
 })
 export class AppModule {}
