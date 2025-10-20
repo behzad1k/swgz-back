@@ -37,7 +37,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "typeorm": "^0.3.27",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "youtube-dl-exec": "^3.0.26"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.10",

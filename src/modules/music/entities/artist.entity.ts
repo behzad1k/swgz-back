@@ -16,6 +16,10 @@ export class Artist {
   @Column({ nullable: true })
   pfp?: string;
 
+  // In artist.entity.ts
+  @Column({ nullable: true })
+  asin: string;
+
   @Column({ nullable: true, unique: true })
   lastFMLink?: string;
 

@@ -33,7 +33,10 @@ export class Song {
   @Column({ nullable: true })
   externalUrl: string;
 
-  @Column({ default: false })
+  @Column({ nullable: true })
+  genre: string;
+
+  @Column({ default: true })
   hasFlac: boolean;
 
   @Column({ nullable: true })
@@ -44,6 +47,9 @@ export class Song {
 
   @Column({ nullable: true, unique: true })
   lastFMLink: string;
+
+  @Column({ nullable: true, unique: true })
+  youtubeLink: string;
 
   @Column({ nullable: true })
   externalListens: number;
@@ -60,6 +66,12 @@ export class Song {
   @Column({ nullable: true })
   standardQuality: string;
 
+  @Column({ nullable: true })
+  asin: string;
+
+  @Column({ nullable: true })
+  amazonUrl: string;
+
   @Column({ type: 'json', nullable: true })
   metadata: any;
 
@@ -74,6 +86,9 @@ export class Song {
 
   @Column({ default: null })
   rankForArtist: number;
+
+  @Column({ default: false })
+  isExplicit: boolean;
 
   @Column({ default: 0 })
   repostCount: number;

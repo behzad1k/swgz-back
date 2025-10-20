@@ -8,12 +8,15 @@ import { SearchFilter } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
 import { LibraryService } from '../library/library.service';
 import { User } from '../users/entities/user.entity';
+import { AmazonService } from './amazon.service';
 import { DiscogsService } from './discogs.service';
 import { Album } from './entities/album.entity';
 import { Artist } from './entities/artist.entity';
 import { SearchHistory } from './entities/search-history.entity';
 import { Song } from './entities/song.entity';
 import { LastfmService } from './lastfm.service';
+
+type MusicProvider = 'lastFM' | 'amazon';
 
 @Injectable()
 export class MusicService {
@@ -30,14 +33,89 @@ export class MusicService {
     private libraryService: LibraryService,
     private lastFMService: LastfmService,
     private discogsService: DiscogsService,
+    private amazonService: AmazonService,
   ) {}
+  private readonly musicProvider: MusicProvider = process.env.MUSIC_PROVIDER as MusicProvider || 'lastFM';
 
-  async search(query: string, user: User, filter: SearchFilter) {
+  private getMusicService() {
+    return this.musicProvider === 'amazon' ? this.amazonService : this.lastFMService;
+  }
+  async search(query: string, user: User, filter?: SearchFilter) {
     await this.searchHistoryRepository.save({
       userId: user.id,
       query,
-      filter
+      filter: filter || 'all'
     });
+
+    const musicService = this.getMusicService();
+
+    // If no filter specified, search everything
+    if (!filter || filter === 'all') {
+      const [tracks, artists, albums] = await Promise.all([
+        musicService.trackSearch(query, 7),
+        musicService.artistSearch(query, 7),
+        musicService.albumSearch(query, 7)
+      ]);
+
+
+      // Get cached results from all types
+      const [cachedSongs, cachedArtists, cachedAlbums] = await Promise.all([
+        this.songRepository.find({
+          where: { title: Like(`%${query}%`) },
+          order: { externalListens: 'DESC' },
+          take: 10
+        }),
+        this.artistRepository.find({
+          where: { name: Like(`%${query}%`) },
+          order: { externalListeners: 'DESC' },
+          take: 10
+        }),
+        this.albumRepository.find({
+          where: { title: Like(`%${query}%`) },
+          order: { externalListeners: 'DESC' },
+          take: 10
+        })
+      ]);
+
+      // Format results
+      const formattedTracks = await musicService.formatResult(
+        musicService.removeCachedDuplicateSongs(cachedSongs, tracks),
+        SEARCH_FILTERS.track
+      );
+      console.log(artists);
+
+      const formattedArtists = await musicService.formatResult(
+        musicService.removeCachedDuplicateArtists(cachedArtists, artists),
+        SEARCH_FILTERS.artist,
+        'pfp'
+      );
+      const formattedAlbums = await musicService.formatResult(
+        musicService.removeCachedDuplicateAlbums(cachedAlbums, albums),
+        SEARCH_FILTERS.album,
+      );
+      console.log(formattedArtists);
+      // Save new results
+      try {
+        await Promise.all([
+          this.songRepository.save(formattedTracks as Song[]),
+          this.artistRepository.save(formattedArtists as Artist[]),
+          this.albumRepository.save(formattedAlbums as Album[])
+        ]);
+      } catch (err) {
+        console.error('Error saving general search results:', err);
+      }
+
+      return {
+        track: [...cachedSongs, ...formattedTracks]
+        .sort((a, b) => b.externalListens - a.externalListens)
+        .sort((a, b) => b.playCount - a.playCount)
+        .slice(0, 20),
+        artist: [...cachedArtists, ...formattedArtists]
+        .sort((a, b) => b.externalListeners - a.externalListeners)
+        .slice(0, 20),
+        album: [...cachedAlbums, ...formattedAlbums]
+      };
+    }
 
     switch (filter) {
       case 'track':
@@ -46,10 +124,10 @@ export class MusicService {
           order: { externalListens: 'DESC' }
         });
 
-        const songResults = await this.lastFMService.trackSearch(query);
+        const songResults = await musicService.trackSearch(query);
 
-        const formattedSongs = await this.lastFMService.formatResult(
-          this.lastFMService.removeCachedDuplicateSongs(cachedSongs, songResults),
+        const formattedSongs = await musicService.formatResult(
+        musicService.removeCachedDuplicateSongs(cachedSongs, applyMapping(songResults, EXTERNAL_MAPPINGS[this.musicProvider].track)),
           SEARCH_FILTERS.track
         );
 
@@ -69,10 +147,17 @@ export class MusicService {
           order: { externalListeners: 'DESC' }
         });
 
-        let newResult = await this.lastFMService.artistSearch(query, 20);
+        let newResult = await musicService.artistSearch(query, 20);
 
-        let formattedResult = await this.lastFMService.formatResult(
-          this.lastFMService.removeCachedDuplicateArtists(cachedResult, newResult.filter(e => e.mbid)),
+        // Filter by mbid only if using LastFM (Amazon doesn't have mbid)
+        if (this.musicProvider === 'lastFM') {
+          newResult = newResult.filter(e => e.mbid);
+        } else {
+          newResult = newResult.filter(e => e.acin);
+        }
+
+        let formattedResult = await musicService.formatResult(
+          musicService.removeCachedDuplicateArtists(cachedResult, applyMapping(newResult, EXTERNAL_MAPPINGS[this.musicProvider].artist)),
           SEARCH_FILTERS.artist,
           'pfp'
         );
@@ -84,16 +169,15 @@ export class MusicService {
         }
 
         return [...cachedResult, ...formattedResult]
-        .sort((a, b) => b.externalListens - a.externalListens);
+        .sort((a, b) => b.externalListeners - a.externalListeners);
 
       case 'album':
-        return await this.lastFMService.albumSearch(query);
+        return await musicService.albumSearch(query);
 
       default:
         return await this.discogsService.search(query);
     }
   }
-
   async prepareTrackToPlay(songData: Partial<Song>, user: User) {
     const findOptions: FindOneOptions<Song> = {
       where: {

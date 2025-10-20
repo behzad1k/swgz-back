@@ -3,6 +3,7 @@ import axios from 'axios';
 import { applyMapping, EXTERNAL_MAPPINGS } from '../../config/mapping.config';
 import { SearchFilter } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
+import { Album } from './entities/album.entity';
 import { Artist } from './entities/artist.entity';
 import { Song } from './entities/song.entity';
 
@@ -169,4 +170,15 @@ export class LastfmService {
         && !cachedNames.has(externalArtist.name);
     });
   }
+
+  removeCachedDuplicateAlbums(cachedArray: Album[], array2: any[]) {
+    const cachedMBIDs = new Set(cachedArray.map(t => t.mbid));
+    const cachedNames = new Set(cachedArray.map(t => t.title));
+
+    return array2.filter((externalArtist) => {
+      return !cachedMBIDs.has(externalArtist.mbid)
+        && !cachedNames.has(externalArtist.name);
+    });
+  }
+
 }

@@ -2,6 +2,7 @@ import { Controller, Get, Post, Query, Param, UseGuards, Body, Res, NotFoundExce
 import { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { QualityPreference, SearchFilter } from '../../types';
+import { DFiStreamingService } from './DFiStreaming.service';
 import { PlaySongDto } from './dto/music.dto';
 import { MusicService } from './music.service';
 import { StreamingService } from './streaming.service';
@@ -9,13 +10,16 @@ import { CurrentUser } from '../../common/decorators/decorators';
 import { User, SubscriptionPlan } from '../users/entities/user.entity';
 import { RequireSubscription } from '../../common/decorators/decorators';
 import { SubscriptionGuard } from '../../common/guards/guards';
+import { YtdlpStreamingService } from './YTDLPStreaming.service';
 
 @Controller('music')
 @UseGuards(AuthGuard(['jwt', 'api-key']))
 export class MusicController {
   constructor(
     private musicService: MusicService,
+    private dfiStreamingService: DFiStreamingService,
     private streamingService: StreamingService,
+    private ytdlpStreamingService: YtdlpStreamingService,
   ) {}
 
   @Get('search')
@@ -47,7 +51,10 @@ export class MusicController {
     }
 
     // Pass user's subscription plan to streaming service
-    await this.streamingService.streamSong(songId, res, quality, user.subscriptionPlan);
+    //
+    // await this.dfiStreamingService.streamSong(songId, res, quality, user.subscriptionPlan);
+    if (quality && quality === 'flac') await this.streamingService.streamSong(songId, res, quality, user.subscriptionPlan);
+    else await this.ytdlpStreamingService.streamSong(songId, res);
   }
 
   @Get('recent-searches')
@@ -62,7 +69,7 @@ export class MusicController {
 
   @Get('artist/:id')
   async getArtist(@Param('id') artistId: string) {
-    if (!artistId) throw new NotFoundException('Artist not found');
+    if (!artistId || artistId == 'undefined') throw new NotFoundException('Artist not found');
     return this.musicService.fetchArtistInfo(artistId);
   }
 

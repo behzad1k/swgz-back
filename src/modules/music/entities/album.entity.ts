@@ -32,6 +32,9 @@ export class Album {
   mbid?: string;
 
   @Column({ nullable: true })
+  asin?: string;
+
+  @Column({ nullable: true })
   releaseDate?: string;
 
   @Column({ nullable: true })
@@ -39,6 +42,12 @@ export class Album {
 
   @Column({ nullable: true })
   artistName?: string;
+
+  @Column({ default: false })
+  isExplicit?: boolean;
+
+  @Column({ nullable: true })
+  genre: string;
 
   @OneToMany(() => Song, song => song.artist)
   songs: Song[];

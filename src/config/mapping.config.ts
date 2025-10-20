@@ -39,6 +39,47 @@ export const EXTERNAL_MAPPINGS = {
       albumCover: (data: any) => data.cover_image || data.thumb,
     }
   },
+  amazon: {
+    track: {
+      title: 'title',
+      asin: 'asin',
+      duration: 'duration',
+      externalId: 'id',
+      amazonUrl: 'url',
+      albumCover: 'image',
+      artistName: (data: any) => data.artist ? typeof data.artist == 'string' ? data.artist : data.artist?.name : '',
+      releaseData: 'original_release_date',
+      albumName: (data: any) => data.album ? typeof data.album == 'string' ? data.album : data.album.name : '',
+      genre: 'genre',
+      isExplicit: 'explicit',
+    },
+    artist: {
+      name: 'name',
+      asin: 'asin',
+      amazonUrl: 'url',
+      externalId: 'id',
+      pfp: 'image',
+      externalListeners: (data: any)=> data.stats ? data.stats?.listeners : data.listeners,
+      externalPlays: (data: any)=> data.stats?.playcount,
+      bio: (data: any)=> data.bio?.summary,
+      fullBio: (data: any)=> data.bio?.content,
+    },
+    album: {
+      title: (data: any) => data.name || data.title,
+      artistName: (data: any) => data.artist ? typeof data.artist == 'string' ? data.artist : data.artist.name : '',
+      amazonUrl: 'url',
+      asin: 'asin',
+      externalId: 'id',
+      releaseData: 'release_date',
+      isExplicit: 'explicit',
+      track_count: 'track_count',
+      genre: 'genre',
+      // externalListens: 'listeners',
+      // externalPlays: 'playcount',
+      albumCover: 'image',
+      // rankForArtist: (data: any)=> data['@attr']?.rank,
+    }
+  }
 };
 
 
