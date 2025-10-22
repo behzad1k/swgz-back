@@ -64,7 +64,7 @@ export class MusicController {
       throw new NotFoundException('FLAC download requires premium subscription');
     }
 
-    return this.musicService.downloadSong(songId, 'flac', user.subscriptionPlan);
+    return this.musicService.downloadSong(songId, quality, user.subscriptionPlan);
   }
 
   /**
@@ -136,21 +136,21 @@ export class MusicController {
     }
 
     // Check if already cached
-    const streamInfo = await this.musicService.getStreamInfo(songId, 'flac', user.subscriptionPlan);
+    const streamInfo = await this.musicService.getStreamInfo(songId, quality, user.subscriptionPlan);
 
     if (streamInfo.ready) {
       return {
         status: 'ready',
         message: 'File already available',
         streamUrl: `/music/stream/${songId}${quality ? `?quality=flac}` : ''}`,
-        quality: 'flac',
+        quality: quality,
         duration: streamInfo.duration,
         fileSize: streamInfo.fileSize,
       };
     }
 
     // Start download
-    await this.musicService.downloadSong(songId, 'flac', user.subscriptionPlan);
+    await this.musicService.downloadSong(songId, quality, user.subscriptionPlan);
 
     return {
       status: 'accepted',
@@ -169,7 +169,7 @@ export class MusicController {
     @Query('quality') quality?: QualityPreference,
   ): Observable<MessageEvent> {
     return interval(500).pipe(
-      switchMap(() => from(this.musicService.getDownloadStatus(songId, 'flac'))),
+      switchMap(() => from(this.musicService.getDownloadStatus(songId, quality))),
       map(status => {
         // Determine event type based on status
         let eventType = 'progress';
@@ -182,7 +182,7 @@ export class MusicController {
         if (status.quality || status.duration || status.fileSize) {
           data = {
             ...data,
-            quality: 'flac',
+            quality: quality,
             duration: status.duration,
             fileSize: status.fileSize,
           };
@@ -243,7 +243,7 @@ export class MusicController {
     }
 
     // Check if file is ready
-    const streamInfo = await this.musicService.getStreamInfo(songId, 'flac', user.subscriptionPlan);
+    const streamInfo = await this.musicService.getStreamInfo(songId, quality, user.subscriptionPlan);
 
     if (!streamInfo.ready) {
       return res.status(404).json({
@@ -255,6 +255,6 @@ export class MusicController {
     }
 
     // File is ready, start streaming
-    await this.musicService.streamSong(songId, res, 'flac', user.subscriptionPlan);
+    await this.musicService.streamSong(songId, res, quality, user.subscriptionPlan);
   }
 }
