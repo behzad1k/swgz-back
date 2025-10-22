@@ -28,6 +28,7 @@ interface ActiveDownload {
   error?: string;
   progress: number;
   duration?: number;
+  filenameChanged?: boolean;
   fileSize?: number;
 }
 
@@ -93,6 +94,7 @@ export class StreamingService {
     fileSize?: number;
     error?: string;
     message?: string;
+    filenameChanged?: boolean; // NEW
   } {
     const cacheKey = this.getCacheKey(songId, quality || 'standard');
     const download = this.activeDownloads.get(cacheKey);
@@ -105,7 +107,7 @@ export class StreamingService {
       };
     }
 
-    return {
+    const result = {
       status: download.status,
       progress: download.progress,
       quality: download.actualQuality || download.requestedQuality as string,
@@ -113,9 +115,16 @@ export class StreamingService {
       fileSize: download.fileSize,
       error: download.error,
       message: this.getStatusMessage(download.status, download.progress),
+      filenameChanged: download.filenameChanged,
     };
-  }
 
+    // Reset the flag after reading it once
+    if (download.filenameChanged) {
+      download.filenameChanged = false;
+    }
+
+    return result;
+  }
   private getStatusMessage(status: string, progress: number): string {
     switch (status) {
       case 'searching':
@@ -291,12 +300,12 @@ export class StreamingService {
       });
     }
 
-    if (!download.filePath || !existsSync(download.filePath)) {
-      if (!res.headersSent) {
-        res.status(404).json({ error: 'File not found' });
-      }
-      return;
-    }
+    // if (!download.filePath || !existsSync(download.filePath)) {
+    //   if (!res.headersSent) {
+    //     res.status(404).json({ error: 'File not found' });
+    //   }
+    //   return;
+    // }
 
     const ext = path.extname(download.filePath).replace('.incomplete', '').toLowerCase();
     const mimeType = this.getMimeType(ext);
@@ -407,35 +416,37 @@ export class StreamingService {
         return;
       }
 
+      // Only process .incomplete files
       if (!filename.endsWith('.incomplete')) {
-        console.log('⏭️ Skipping final file (already processed incomplete):', filename);
+        console.log('⏭️ Skipping non-incomplete file:', filename);
         return;
       }
 
       fileDetected = true;
       console.log('🔒 File detection locked');
 
-      const filePath = path.join(streamDir, filename);
+      const incompleteFilePath = path.join(streamDir, filename);
+      const symlinkPath = incompleteFilePath.replace('.incomplete', ''); // Remove .incomplete for symlink name
 
       // Wait for file to be ready
       let attempts = 0;
-      const maxAttempts = 100;
+      const maxAttempts = 500;
       let fileReady = false;
 
       while (attempts < maxAttempts && !fileReady) {
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 700));
 
-        if (!existsSync(filePath)) {
+        if (!existsSync(incompleteFilePath)) {
           attempts++;
           continue;
         }
 
         try {
-          const stats = await import('fs/promises').then(fs => fs.stat(filePath));
-          if (stats.size >= 100536) {
+          const stats = await import('fs/promises').then(fs => fs.stat(incompleteFilePath));
+          if (stats.size >= 3145728) {
             fileReady = true;
             download.fileSize = stats.size;
-            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 300}ms`);
+            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 700}ms`);
           } else {
             console.log(`⏳ File has ${stats.size} bytes, waiting for more...`);
             attempts++;
@@ -451,29 +462,60 @@ export class StreamingService {
         return;
       }
 
-      fileDetected = true;
+      try {
+        const { symlink } = await import('fs/promises');
 
+        // Remove existing symlink if it exists
+        if (existsSync(symlinkPath)) {
+          await unlink(symlinkPath);
+          console.log('🗑️ Removed existing symlink');
+        }
+
+        // Use relative path for symlink to avoid issues
+        const relativeTarget = path.basename(incompleteFilePath);
+        await symlink(relativeTarget, symlinkPath);
+        console.log(`🔗 Created symlink: ${symlinkPath} -> ${relativeTarget}`);
+
+        // Verify symlink was created successfully
+        if (!existsSync(symlinkPath)) {
+          throw new Error('Symlink creation appeared to succeed but file does not exist');
+        }
+
+        const { lstat } = await import('fs/promises');
+        const symlinkStats = await lstat(symlinkPath);
+        if (!symlinkStats.isSymbolicLink()) {
+          throw new Error('Created file is not a symlink');
+        }
+
+        console.log('✅ Symlink verified successfully');
+      } catch (error) {
+        console.error('❌ Failed to create symlink:', error);
+        fileDetected = false;
+        return;
+      }
+
+      // NOW set the download state (after symlink is confirmed to exist)
       const ext = path.extname(filename).replace('.incomplete', '').toLowerCase();
-      download.filePath = filePath;
+      download.filePath = symlinkPath;
       download.actualQuality = ext === '.flac' ? 'flac' : download.requestedQuality as string;
-      download.status = 'ready';
+      download.status = 'ready'; // Only set to ready AFTER symlink exists
       download.progress = 50;
 
       const cacheKey = this.getCacheKey(song.id, download.requestedQuality);
-      this.streamCache.set(cacheKey, filePath);
+      this.streamCache.set(cacheKey, symlinkPath);
 
-      console.log('📁 FILE DETECTED via watcher:', filePath);
+      console.log('📁 SYMLINK READY for streaming:', symlinkPath);
       console.log('📊 Actual quality:', download.actualQuality, '(requested:', download.requestedQuality, ')');
 
       // Start progressive tailing for active streams
       if (download.activeStreams.size > 0) {
-        this.startProgressiveTailing(filePath, download, 0);
+        // Tail the symlink - reads will transparently go through to .incomplete
+        this.startProgressiveTailing(symlinkPath, download, 0);
       }
     });
 
     console.log('👁️ File watcher started for:', streamDir);
   }
-
   private async downloadAndStream(
     song: Song,
     res: Response,
@@ -752,24 +794,66 @@ export class StreamingService {
         const isSuccess = code === 0 && download.filePath && !notFound;
 
         if (isSuccess) {
-          if (download.filePath.endsWith('.incomplete')) {
-            const withoutIncomplete = download.filePath.replace('.incomplete', '');
-            if (existsSync(withoutIncomplete)) {
-              console.log('📝 File completed, updating path:', withoutIncomplete);
-              download.filePath = withoutIncomplete;
-              const cacheKey = this.getCacheKey(song.id, requestedQuality);
-              this.streamCache.set(cacheKey, withoutIncomplete);
-            }
-          }
+          console.log('✅ Download completed successfully');
 
-          download.progress = 100;
-          await this.handleSuccessfulDownload(song, download);
+          // At this point, sldl has already renamed .incomplete to final name
+          // The symlink has been atomically replaced by the real file
+
+          // Check if the final file exists (without .incomplete)
+          if (existsSync(download.filePath)) {
+            console.log('✅ Final file exists:', download.filePath);
+
+            // Check if it's still a symlink or now a real file
+            const { lstat } = await import('fs/promises');
+            const stats = await lstat(download.filePath);
+
+            if (stats.isSymbolicLink()) {
+              console.log('⚠️ Still a symlink, waiting for sldl to rename...');
+
+              // Wait for the real file to appear
+              let waitAttempts = 0;
+              while (waitAttempts < 20) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+                const newStats = await lstat(download.filePath).catch(() => null);
+                if (newStats && !newStats.isSymbolicLink()) {
+                  console.log('✅ Real file appeared, symlink replaced');
+                  break;
+                }
+                waitAttempts++;
+              }
+            } else {
+              console.log('✅ Symlink already replaced with real file');
+            }
+
+            download.progress = 100;
+
+            // Update cache key to point to the final file
+            const cacheKey = this.getCacheKey(song.id, requestedQuality);
+            this.streamCache.set(cacheKey, download.filePath);
+
+            await this.handleSuccessfulDownload(song, download);
+          } else {
+            console.error('❌ Final file does not exist:', download.filePath);
+            download.status = 'failed';
+            download.error = 'File disappeared after download';
+          }
         } else {
           console.error('❌ SLDL failed - code:', code, 'notFound:', notFound, 'hasFile:', !!download.filePath);
 
           download.status = 'failed';
 
-          // Mark quality as unavailable
+          // Clean up symlink if it exists
+          if (download.filePath && existsSync(download.filePath)) {
+            const { lstat } = await import('fs/promises');
+            const stats = await lstat(download.filePath).catch(() => null);
+            if (stats?.isSymbolicLink()) {
+              await unlink(download.filePath).catch(err =>
+                console.error('Failed to clean up symlink:', err)
+              );
+            }
+          }
+
+          // Mark quality as unavailable (existing code)
           if (notFound) {
             if (requestedQuality === 'flac') {
               song.hasFlac = false;
@@ -791,12 +875,6 @@ export class StreamingService {
           download.error = notFound
             ? `The ${requestedQuality} quality is not available for this track`
             : 'Download service error';
-
-          if (download.filePath && existsSync(download.filePath)) {
-            unlink(download.filePath).catch(err =>
-              console.error('Failed to clean up failed file:', err)
-            );
-          }
         }
       });
     });
@@ -833,6 +911,7 @@ export class StreamingService {
     let totalBytesBroadcast = 0;
 
     console.log('🎬 Starting progressive tailing from position:', startPosition);
+    console.log('📂 Tailing file:', currentFilePath);
 
     const tailInterval = setInterval(async () => {
       if (isReading) return;
@@ -846,52 +925,65 @@ export class StreamingService {
       try {
         isReading = true;
 
-        if (currentFilePath.endsWith('.incomplete')) {
-          const withoutIncomplete = currentFilePath.replace('.incomplete', '');
-          if (existsSync(withoutIncomplete) && !existsSync(currentFilePath)) {
-            console.log('📝 File renamed from .incomplete:', withoutIncomplete);
-            currentFilePath = withoutIncomplete;
-            download.filePath = currentFilePath;
+        if (!existsSync(currentFilePath)) {
+          console.log('⚠️ File no longer exists:', currentFilePath);
 
-            const cacheEntry = Array.from(this.activeDownloads.entries())
-            .find(([_, d]) => d === download);
-            if (cacheEntry) {
-              this.streamCache.set(cacheEntry[0], currentFilePath);
-            }
+          // If this was during the transition, wait a moment and retry
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          if (existsSync(currentFilePath)) {
+            console.log('✅ File reappeared (symlink replaced with real file)');
+          } else {
+            isReading = false;
+            return;
           }
         }
 
-        if (!existsSync(currentFilePath)) {
-          console.log('⚠️ File no longer exists');
-          isReading = false;
-          return;
+        let stats;
+        try {
+          stats = await import('fs/promises').then(fs => fs.stat(currentFilePath));
+        } catch (error: any) {
+          if (error.code === 'ENOENT') {
+            console.log('⏳ File temporarily unavailable (probably being renamed)');
+            isReading = false;
+            return;
+          }
+          throw error;
         }
 
-        const stats = await import('fs/promises').then(fs => fs.stat(currentFilePath));
         const currentSize = stats.size;
 
         if (currentSize > lastPosition) {
           const bytesToRead = currentSize - lastPosition;
           console.log('📖 Reading new data:', bytesToRead, 'bytes from position', lastPosition);
 
-          const chunk = await this.readFileChunk(currentFilePath, lastPosition, currentSize - 1);
-          totalBytesBroadcast += chunk.length;
+          try {
+            const chunk = await this.readFileChunk(currentFilePath, lastPosition, currentSize - 1);
+            totalBytesBroadcast += chunk.length;
 
-          console.log('📡 Broadcasting', chunk.length, 'bytes to', download.activeStreams.size, 'clients');
+            console.log('📡 Broadcasting', chunk.length, 'bytes to', download.activeStreams.size, 'clients');
 
-          let successfulWrites = 0;
-          download.activeStreams.forEach((passThrough) => {
-            if (!passThrough.destroyed) {
-              const written = passThrough.write(chunk);
-              if (written) {
-                successfulWrites++;
+            let successfulWrites = 0;
+            download.activeStreams.forEach((passThrough) => {
+              if (!passThrough.destroyed) {
+                const written = passThrough.write(chunk);
+                if (written) {
+                  successfulWrites++;
+                }
               }
+            });
+
+            console.log('✅ Successfully wrote to', successfulWrites, '/', download.activeStreams.size, 'clients');
+
+            lastPosition = currentSize;
+          } catch (readError: any) {
+            if (readError.code === 'ENOENT') {
+              console.log('⏳ File disappeared during read (probably being renamed)');
+              // Don't update lastPosition, retry on next interval
+            } else {
+              throw readError;
             }
-          });
-
-          console.log('✅ Successfully wrote to', successfulWrites, '/', download.activeStreams.size, 'clients');
-
-          lastPosition = currentSize;
+          }
         }
 
         if (download.isComplete && currentSize === lastPosition) {
@@ -915,9 +1007,7 @@ export class StreamingService {
         }
       }
     }, 150);
-  }
-
-  private async readFileChunk(
+  }  private async readFileChunk(
     filePath: string,
     start: number,
     end: number
@@ -957,7 +1047,7 @@ export class StreamingService {
       }
 
       console.log('⏳ Waiting briefly for streams to complete...');
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 50000));
 
       const stats = await import('fs/promises').then(fs => fs.stat(finalTempPath!));
       const ext = path.extname(finalTempPath).toLowerCase();
@@ -994,20 +1084,20 @@ export class StreamingService {
       const cacheKey = this.getCacheKey(song.id, download.requestedQuality);
       this.streamCache.set(cacheKey, permanentPath);
 
-      setTimeout(async () => {
-        try {
-          if (existsSync(finalTempPath!)) {
-            await unlink(finalTempPath!);
-            console.log('🧹 Cleaned up temp file:', finalTempPath);
-          }
-          if (existsSync(download.streamDir)) {
-            await rmdir(download.streamDir, { recursive: true });
-            console.log('🧹 Cleaned up stream directory:', download.streamDir);
-          }
-        } catch (error) {
-          console.error('Failed to clean up:', error);
-        }
-      }, 5000);
+      // setTimeout(async () => {
+      //   try {
+      //     if (existsSync(finalTempPath!)) {
+      //       await unlink(finalTempPath!);
+      //       console.log('🧹 Cleaned up temp file:', finalTempPath);
+      //     }
+      //     if (existsSync(download.streamDir)) {
+      //       await rmdir(download.streamDir, { recursive: true });
+      //       console.log('🧹 Cleaned up stream directory:', download.streamDir);
+      //     }
+      //   } catch (error) {
+      //     console.error('Failed to clean up:', error);
+      //   }
+      // }, 10000);
 
     } catch (error) {
       console.error('❌ Error handling download:', error);

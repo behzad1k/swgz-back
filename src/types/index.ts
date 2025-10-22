@@ -174,6 +174,7 @@ export interface DownloadStatus {
   quality?: string;
   duration?: number;
   fileSize?: number;
+  filenameChanged?: any;
 }
 
 export type QualityPreference = 'flac' | '320' | '256' | '192' | '128' | 'standard';

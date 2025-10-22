@@ -270,11 +270,14 @@ export class MusicService {
     quality?: QualityPreference
   ): Promise<DownloadStatus> {
     if (quality === 'flac') {
-      return this.streamingService.getDownloadStatus(songId, quality);
+      const status = this.streamingService.getDownloadStatus(songId, quality);
+      return {
+        ...status,
+        filenameChanged: status.filenameChanged, // Pass through
+      };
     }
     return this.ytdlpStreamingService.getDownloadStatus(songId);
   }
-
   /**
    * Schedule temporary file deletion
    */

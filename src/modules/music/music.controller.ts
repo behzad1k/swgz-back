@@ -188,12 +188,21 @@ export class MusicController {
           };
         }
 
+        // NEW: Send filename_changed event
+        if (status.filenameChanged) {
+          eventType = 'filename_changed';
+          data = {
+            ...data,
+            streamUrl: `/music/stream/${songId}${quality ? `?quality=flac` : ''}`,
+          };
+        }
+
         // Send ready event when complete
         if (status.status === 'ready') {
           eventType = 'ready';
           data = {
             ...data,
-            streamUrl: `/music/stream/${songId}${quality ? `?quality=flac}` : ''}`,
+            streamUrl: `/music/stream/${songId}${quality ? `?quality=flac` : ''}`,
           };
         }
 
@@ -211,13 +220,12 @@ export class MusicController {
           data: data,
         } as MessageEvent;
       }),
-      // Stop sending events after ready or failed
+      // Don't stop on ready - let frontend control when to close
       takeWhile((event) => {
-        return event.type !== 'ready' && event.type !== 'error';
-      }, true), // true = include the final event
+        return event.type !== 'error'; // Only stop on error
+      }, true),
     );
   }
-
   /**
    * Stream endpoint - only called when file is ready
    */
