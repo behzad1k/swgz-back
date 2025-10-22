@@ -153,6 +153,29 @@ export interface CronJobConfig {
   description?: string;
 }
 
-export type QualityPreference = 'flac' | '320' | '256' | '192' | '128';
+export interface StreamInfo {
+  status: 'ready' | 'downloading' | 'searching' | 'not_started';
+  ready: boolean;
+  filePath?: string;
+  quality?: string;
+  duration?: number;
+  fileSize?: number;
+  mimeType?: string;
+  progress?: number;
+  estimatedTime?: number;
+  message?: string;
+}
+
+export interface DownloadStatus {
+  status: string;
+  progress: number;
+  message?: string;
+  error?: string;
+  quality?: string;
+  duration?: number;
+  fileSize?: number;
+}
+
+export type QualityPreference = 'flac' | '320' | '256' | '192' | '128' | 'standard';
 
 export type SearchFilter = 'all' | 'track' | 'artist' | 'album' | 'stalker'

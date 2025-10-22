@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Response } from 'express';
 import { ChildProcess } from 'child_process';
 import { createReadStream, existsSync, watch, FSWatcher } from 'fs';
-import { unlink, mkdir, readdir, rmdir } from 'fs/promises';
+import { unlink, mkdir, readdir } from 'fs/promises';
 import path from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -17,6 +17,12 @@ interface ActiveDownload {
   streamDir: string;
   watcher: FSWatcher | null;
   jobName: string;
+  status: 'searching' | 'downloading' | 'ready' | 'failed';
+  error?: string;
+  progress: number;
+  quality?: string;
+  duration?: number;
+  fileSize?: number;
 }
 
 @Injectable()
@@ -50,27 +56,225 @@ export class YtdlpStreamingService {
     return songId;
   }
 
-  async streamSong(
-    songId: string,
-    res: Response,
-  ): Promise<void> {
-    const song = await this.songRepository.findOne({
-      where: { id: songId }
-    });
+  /**
+   * Get download status for a song
+   */
+  getDownloadStatus(songId: string): {
+    status: string;
+    progress: number;
+    quality?: string;
+    duration?: number;
+    fileSize?: number;
+    error?: string;
+    message?: string;
+  } {
+    const cacheKey = this.getCacheKey(songId);
+    const download = this.activeDownloads.get(cacheKey);
+
+    if (!download) {
+      return {
+        status: 'not_started',
+        progress: 0,
+        message: 'Download has not been initiated'
+      };
+    }
+
+    return {
+      status: download.status,
+      progress: download.progress,
+      quality: download.quality,
+      duration: download.duration,
+      fileSize: download.fileSize,
+      error: download.error,
+      message: this.getStatusMessage(download.status, download.progress),
+    };
+  }
+
+  private getStatusMessage(status: string, progress: number): string {
+    switch (status) {
+      case 'searching':
+        return 'Searching for track on YouTube...';
+      case 'downloading':
+        return `Downloading... ${progress}%`;
+      case 'ready':
+        return 'File ready for streaming';
+      case 'failed':
+        return 'Download failed';
+      default:
+        return 'Unknown status';
+    }
+  }
+
+  /**
+   * Start background download without streaming
+   */
+  async startBackgroundDownload(songId: string): Promise<void> {
+    const song = await this.songRepository.findOne({ where: { id: songId } });
 
     if (!song) {
       throw new NotFoundException('Song not found');
     }
 
-    // Check if we have a cached/downloaded file
+    // Check if already downloading
+    const cacheKey = this.getCacheKey(songId);
+    if (this.activeDownloads.has(cacheKey)) {
+      console.log('⚠️ Download already in progress for song:', songId);
+      return;
+    }
+
+    // Check if already cached
+    if (song.standardPath && existsSync(song.standardPath)) {
+      console.log('✅ Song already cached:', songId);
+      return;
+    }
+
+    const timestamp = Date.now();
+    const streamDirName = `${song.id}-${timestamp}`;
+    const streamDir = path.join(this.tempDir, streamDirName);
+
+    await mkdir(streamDir, { recursive: true });
+
+    const download: ActiveDownload = {
+      process: null,
+      activeStreams: new Set(),
+      filePath: null,
+      isComplete: false,
+      streamDir,
+      watcher: null,
+      jobName: `ytdlp-${streamDirName}`,
+      status: 'searching',
+      progress: 0,
+    };
+
+    this.activeDownloads.set(cacheKey, download);
+
+    // Setup file watcher
+    this.setupFileWatcher(download, streamDir, song);
+
+    // Start download process
+    this.performDownload(song, download, streamDir).catch(error => {
+      console.error('Background download error:', error);
+      download.status = 'failed';
+      download.error = error.message;
+    });
+  }
+
+  async streamSong(songId: string, res: Response): Promise<void> {
+    const song = await this.songRepository.findOne({ where: { id: songId } });
+
+    if (!song) {
+      throw new NotFoundException('Song not found');
+    }
+
+    // This should not happen as music.service checks cache first
+    // But just in case...
     if (song.standardPath && existsSync(song.standardPath)) {
       console.log(`📂 Playing cached file: ${song.standardPath}`);
       return this.streamFromFile(song.standardPath, res);
     }
 
-    // Need to download
-    console.log('⬇️ No cached file, starting download');
+    const cacheKey = this.getCacheKey(songId);
+    const existingDownload = this.activeDownloads.get(cacheKey);
+
+    // If download is ready, stream it
+    if (existingDownload?.status === 'ready' && existingDownload.filePath && existsSync(existingDownload.filePath)) {
+      console.log('📂 File ready from active download, streaming...');
+      return this.joinExistingStream(existingDownload, res);
+    }
+
+    // If download is in progress, join it
+    if (existingDownload && existingDownload.status !== 'failed') {
+      console.log('🔄 Joining existing download...');
+      return this.joinExistingStream(existingDownload, res);
+    }
+
+    // Start new download with streaming
+    console.log('⬇️ Starting new download with streaming...');
     await this.downloadAndStream(song, res);
+  }
+
+  private async joinExistingStream(download: ActiveDownload, res: Response): Promise<void> {
+    const passThrough = new PassThrough();
+    download.activeStreams.add(passThrough);
+
+    res.on('close', () => {
+      console.log('❌ Client disconnected from stream');
+      download.activeStreams.delete(passThrough);
+      passThrough.end();
+    });
+
+    res.on('error', (error) => {
+      console.error('❌ Response error:', error);
+    });
+
+    // Wait for file to be ready if still downloading
+    if (download.status !== 'ready' || !download.filePath) {
+      const maxWaitTime = 120000; // 2 minutes
+      const startTime = Date.now();
+
+      await new Promise<void>((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          if (download.status === 'ready' && download.filePath && existsSync(download.filePath)) {
+            clearInterval(checkInterval);
+            resolve();
+          } else if (download.status === 'failed') {
+            clearInterval(checkInterval);
+            reject(new Error(download.error || 'Download failed'));
+          } else if (Date.now() - startTime > maxWaitTime) {
+            clearInterval(checkInterval);
+            reject(new Error('Download timeout'));
+          }
+        }, 500);
+      }).catch(error => {
+        download.activeStreams.delete(passThrough);
+        if (!res.headersSent) {
+          res.status(404).json({ error: error.message });
+        }
+        throw error;
+      });
+    }
+
+    if (!download.filePath || !existsSync(download.filePath)) {
+      if (!res.headersSent) {
+        res.status(404).json({ error: 'File not found' });
+      }
+      return;
+    }
+
+    const ext = path.extname(download.filePath).replace('.part', '').toLowerCase();
+    const mimeType = this.getMimeType(ext);
+
+    try {
+      const stats = await import('fs/promises').then(fs => fs.stat(download.filePath!));
+
+      res.writeHead(200, {
+        'Content-Type': mimeType,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Quality': download.quality || 'standard',
+      });
+
+      passThrough.pipe(res);
+
+      // Send current file content
+      const currentStream = createReadStream(download.filePath, { start: 0 });
+      currentStream.pipe(passThrough, { end: false });
+
+      currentStream.on('end', () => {
+        console.log('✅ Client caught up with current content');
+      });
+
+      currentStream.on('error', (error) => {
+        console.error('❌ Stream error:', error);
+        passThrough.end();
+      });
+    } catch (error) {
+      console.error('❌ Error joining stream:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Streaming error' });
+      }
+    }
   }
 
   private async streamFromFile(filePath: string, res: Response): Promise<void> {
@@ -118,11 +322,262 @@ export class YtdlpStreamingService {
     }
   }
 
-  /**
-   * Search for a track on YouTube
-   * If PREFER_AUDIO_VERSION=true, searches top 5 results and prefers "Official Audio"
-   * Otherwise, downloads first result immediately
-   */
+  private setupFileWatcher(download: ActiveDownload, streamDir: string, song: Song): void {
+    let fileDetected = false;
+
+    download.watcher = watch(streamDir, { persistent: false }, async (eventType, filename) => {
+      if (!filename || fileDetected) return;
+
+      const audioExtensions = ['.mp3', '.flac', '.opus', '.m4a', '.ogg', '.webm', '.aac', '.wav'];
+      const isAudioFile = audioExtensions.some(ext =>
+        filename.endsWith(ext) || filename.endsWith(ext + '.part')
+      );
+
+      if (!isAudioFile) return;
+
+      fileDetected = true;
+      console.log('🔒 File detection locked');
+
+      const filePath = path.join(streamDir, filename);
+      const isPartFile = filename.endsWith('.part');
+
+      // Wait for file to be ready
+      let attempts = 0;
+      const maxAttempts = 100;
+      let fileReady = false;
+
+      while (attempts < maxAttempts && !fileReady) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        if (!existsSync(filePath)) {
+          attempts++;
+          continue;
+        }
+
+        try {
+          const stats = await import('fs/promises').then(fs => fs.stat(filePath));
+          const threshold = isPartFile ? 32768 : 65536;
+
+          if (stats.size >= threshold) {
+            fileReady = true;
+            download.fileSize = stats.size;
+            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 300}ms`);
+          } else {
+            attempts++;
+          }
+        } catch (error) {
+          attempts++;
+        }
+      }
+
+      if (!fileReady) {
+        console.log('❌ File never became ready with sufficient data');
+        fileDetected = false;
+        return;
+      }
+
+      const ext = path.extname(filename).replace('.part', '').toLowerCase();
+      download.filePath = filePath;
+      download.status = 'ready';
+      download.progress = 50;
+      download.quality = this.determineQualityFromExtension(ext);
+
+      const cacheKey = this.getCacheKey(song.id);
+      this.streamCache.set(cacheKey, filePath);
+
+      console.log('📁 FILE DETECTED:', filePath);
+      console.log('📊 Quality:', download.quality);
+
+      // Start progressive tailing for active streams
+      if (download.activeStreams.size > 0) {
+        this.startProgressiveTailing(filePath, download, 0);
+      }
+    });
+  }
+
+  private determineQualityFromExtension(ext: string): string {
+    if (ext === '.flac') return 'flac';
+    return '320'; // Assume 320 for MP3
+  }
+
+  private async downloadAndStream(song: Song, res: Response): Promise<void> {
+    const timestamp = Date.now();
+    const streamDirName = `${song.id}-${timestamp}`;
+    const streamDir = path.join(this.tempDir, streamDirName);
+    const cacheKey = this.getCacheKey(song.id);
+
+    await mkdir(streamDir, { recursive: true });
+    console.log('📁 Created stream directory:', streamDir);
+
+    const passThrough = new PassThrough();
+
+    const download: ActiveDownload = {
+      process: null,
+      activeStreams: new Set([passThrough]),
+      filePath: null,
+      isComplete: false,
+      streamDir,
+      watcher: null,
+      jobName: `ytdlp-${streamDirName}`,
+      status: 'searching',
+      progress: 0,
+    };
+
+    this.activeDownloads.set(cacheKey, download);
+
+    let headersSent = false;
+
+    const cleanup = async (shouldDeleteFile: boolean = false) => {
+      if (download.watcher) {
+        download.watcher.close();
+        download.watcher = null;
+      }
+
+      setTimeout(async () => {
+        this.activeDownloads.delete(cacheKey);
+
+        try {
+          if (shouldDeleteFile && download.filePath && existsSync(download.filePath)) {
+            await unlink(download.filePath);
+          }
+
+          if (existsSync(streamDir)) {
+            const files = await readdir(streamDir);
+            for (const file of files) {
+              await unlink(path.join(streamDir, file));
+            }
+            await import('fs/promises').then(fs => fs.rm(streamDir, { recursive: true }));
+          }
+        } catch (err) {
+          console.error('Failed to clean up:', err);
+        }
+      }, 5000);
+    };
+
+    res.on('close', () => {
+      console.log('❌ Client disconnected');
+      download.activeStreams.delete(passThrough);
+      passThrough.end();
+
+      // Don't kill download, let it complete for caching
+      if (download.activeStreams.size === 0) {
+        console.log('ℹ️ No more clients, but continuing download for cache');
+      }
+    });
+
+    res.on('error', (error) => {
+      console.error('❌ Response error:', error);
+    });
+
+    // Setup file watcher with streaming support
+    let fileDetected = false;
+    download.watcher = watch(streamDir, { persistent: false }, async (eventType, filename) => {
+      if (!filename || fileDetected) return;
+
+      const audioExtensions = ['.mp3', '.flac', '.opus', '.m4a', '.ogg', '.webm', '.aac', '.wav'];
+      const isAudioFile = audioExtensions.some(ext =>
+        filename.endsWith(ext) || filename.endsWith(ext + '.part')
+      );
+
+      if (!isAudioFile) return;
+
+      fileDetected = true;
+      const filePath = path.join(streamDir, filename);
+
+      // Wait for file to be ready
+      let attempts = 0;
+      const maxAttempts = 100;
+      let fileReady = false;
+
+      while (attempts < maxAttempts && !fileReady) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        if (!existsSync(filePath)) {
+          attempts++;
+          continue;
+        }
+
+        try {
+          const stats = await import('fs/promises').then(fs => fs.stat(filePath));
+          const threshold = filename.endsWith('.part') ? 32768 : 65536;
+
+          if (stats.size >= threshold) {
+            fileReady = true;
+            download.fileSize = stats.size;
+          } else {
+            attempts++;
+          }
+        } catch (error) {
+          attempts++;
+        }
+      }
+
+      if (!fileReady) {
+        fileDetected = false;
+        return;
+      }
+
+      const ext = path.extname(filename).replace('.part', '').toLowerCase();
+      download.filePath = filePath;
+      download.status = 'ready';
+      download.progress = 50;
+      download.quality = this.determineQualityFromExtension(ext);
+      this.streamCache.set(cacheKey, filePath);
+
+      if (headersSent) return;
+
+      headersSent = true;
+      const mimeType = this.getMimeType(ext);
+
+      res.writeHead(200, {
+        'Content-Type': mimeType,
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Quality': download.quality,
+      });
+
+      passThrough.pipe(res);
+      this.startProgressiveTailing(filePath, download, 0);
+    });
+
+    // Perform download
+    await this.performDownload(song, download, streamDir);
+
+    if (download.status === 'failed' && !headersSent) {
+      res.status(404).json({
+        error: download.error || 'Download failed',
+      });
+      await cleanup(true);
+    }
+  }
+
+  private async performDownload(song: Song, download: ActiveDownload, streamDir: string): Promise<void> {
+    let sourceUrl = song.youtubeLink;
+
+    if (!sourceUrl) {
+      download.status = 'searching';
+      const success = await this.searchAndDownloadYouTubeTrack(song, streamDir, download);
+
+      if (!success) {
+        download.status = 'failed';
+        download.error = 'Track not found on YouTube';
+        return;
+      }
+    } else {
+      download.status = 'downloading';
+      const success = await this.downloadVideo(sourceUrl, streamDir, download, song);
+
+      if (!success) {
+        download.status = 'failed';
+        download.error = 'Download failed';
+        return;
+      }
+    }
+
+    download.progress = 100;
+  }
+
   private async searchAndDownloadYouTubeTrack(
     song: Song,
     streamDir: string,
@@ -132,7 +587,7 @@ export class YtdlpStreamingService {
       const searchQuery = this.buildSearchQuery(song);
 
       if (!searchQuery) {
-        console.error('❌ Cannot build search query - missing song title/artist');
+        console.error('❌ Cannot build search query');
         return false;
       }
 
@@ -142,8 +597,7 @@ export class YtdlpStreamingService {
       let videoUrl: string;
 
       if (this.preferAudioVersion) {
-        // Two-step: Search top 5, pick best match, then download
-        console.log('🎯 Searching top 5 results for best audio match...');
+        console.log('🎯 Searching top 5 results...');
 
         const searchUrl = `ytsearch5:${searchQuery}`;
         const searchArgs = [
@@ -163,17 +617,9 @@ export class YtdlpStreamingService {
           jsonOutput += data.toString();
         });
 
-        searchProcess.stderr.on('data', (data: Buffer) => {
-          const errorOutput = data.toString().trim();
-          if (errorOutput) {
-            console.error('yt-dlp search stderr:', errorOutput);
-          }
-        });
-
         const searchResults = await new Promise<any[]>((resolve) => {
           searchProcess.on('close', async (code) => {
             if (code !== 0) {
-              console.error('❌ Search failed with code:', code);
               resolve([]);
               return;
             }
@@ -183,47 +629,33 @@ export class YtdlpStreamingService {
               const videos = lines.map(line => JSON.parse(line));
               resolve(videos);
             } catch (parseError) {
-              console.error('❌ Failed to parse search results:', parseError);
               resolve([]);
             }
           });
 
-          searchProcess.on('error', (error) => {
-            console.error('❌ Search process error:', error);
-            resolve([]);
-          });
+          searchProcess.on('error', () => resolve([]));
         });
 
         if (searchResults.length === 0) {
-          console.error('❌ No search results found');
           return false;
         }
 
-        // Find best match - prefer "Official Audio"
         let bestMatch = searchResults[0];
 
         for (const video of searchResults) {
           const title = video.title.toLowerCase();
-
           if (title.includes('official audio') || title.includes('audio')) {
-            console.log('✅ Found preferred audio version:', video.title);
             bestMatch = video;
             break;
           }
         }
 
-        if (bestMatch !== searchResults[0]) {
-          console.log('🎯 Selected:', bestMatch.title);
-          console.log('   Over first result:', searchResults[0].title);
-        } else {
-          console.log('🎯 Using first result:', bestMatch.title);
-        }
-
         videoUrl = bestMatch.webpage_url || bestMatch.url;
 
-        // Update song metadata
         song.youtubeLink = videoUrl;
         song.youtubeId = bestMatch.id;
+        song.duration = bestMatch.duration;
+        download.duration = bestMatch.duration;
         song.metadata = {
           ...song.metadata,
           youtubeTitle: bestMatch.title,
@@ -233,26 +665,19 @@ export class YtdlpStreamingService {
         await this.songRepository.save(song);
 
       } else {
-        // One-step: Download first result immediately
-        console.log('⚡ Fast mode: downloading first result directly');
         const searchUrl = `ytsearch1:${searchQuery}`;
-        videoUrl = searchUrl; // yt-dlp will handle the search
+        videoUrl = searchUrl;
       }
 
-      console.log('📺 Downloading from:', videoUrl);
-
-      // Download the video
+      download.status = 'downloading';
       return await this.downloadVideo(videoUrl, streamDir, download, song);
 
     } catch (error) {
-      console.error('❌ YouTube search+download error:', error);
+      console.error('❌ YouTube search error:', error);
       return false;
     }
   }
 
-  /**
-   * Download a video from YouTube
-   */
   private async downloadVideo(
     videoUrl: string,
     streamDir: string,
@@ -277,16 +702,13 @@ export class YtdlpStreamingService {
       '--newline',
       '--no-warnings',
       '--ignore-errors',
-      '--print-json', // Print JSON after download
+      '--print-json',
     ];
 
     const ffmpegPath = process.env.FFMPEG_PATH;
     if (ffmpegPath) {
       downloadArgs.push('--ffmpeg-location', ffmpegPath);
     }
-
-    console.log('🚀 Starting download with yt-dlp');
-    console.log('📋 Command:', ytdlpPath, downloadArgs.join(' '));
 
     const { spawn } = await import('child_process');
     const ytdlp = spawn(ytdlpPath, downloadArgs);
@@ -295,28 +717,21 @@ export class YtdlpStreamingService {
     let jsonOutput = '';
     let notFound = false;
 
-    console.log('🎯 yt-dlp download process started with PID:', ytdlp.pid);
-
     ytdlp.stdout.on('data', (data: Buffer) => {
       const output = data.toString().trim();
 
-      // Capture JSON output
       if (output.startsWith('{')) {
         jsonOutput += output;
       } else {
-        console.log('yt-dlp stdout:', output);
+        const progressMatch = output.match(/(\d+\.?\d*)%/);
+        if (progressMatch) {
+          download.progress = Math.min(90, parseFloat(progressMatch[1]));
+        }
       }
 
       if (output.toLowerCase().includes('not available') ||
-        output.toLowerCase().includes('not found') ||
-        output.toLowerCase().includes('error')) {
-        console.log('⚠️ Track not available');
+        output.toLowerCase().includes('not found')) {
         notFound = true;
-      }
-
-      if (output.toLowerCase().includes('100%') ||
-        output.toLowerCase().includes('downloaded')) {
-        console.log('✅ Download completed successfully');
       }
     });
 
@@ -329,15 +744,14 @@ export class YtdlpStreamingService {
 
     return new Promise((resolve) => {
       ytdlp.on('close', async (code) => {
-        console.log('yt-dlp download process closed with code:', code);
-
         if (code === 0 && !notFound) {
-          // Update metadata if we got JSON output and song is provided
           if (jsonOutput && song && !this.preferAudioVersion) {
             try {
               const videoInfo = JSON.parse(jsonOutput);
               song.youtubeLink = videoInfo.webpage_url || videoInfo.url;
               song.youtubeId = videoInfo.id;
+              song.duration = videoInfo.duration;
+              download.duration = videoInfo.duration;
               song.metadata = {
                 ...song.metadata,
                 youtubeTitle: videoInfo.title,
@@ -350,18 +764,14 @@ export class YtdlpStreamingService {
             }
           }
 
-          console.log('✅ Download succeeded');
+          await this.handleStreamComplete(song, download);
           resolve(true);
         } else {
-          console.error('❌ Download failed');
           resolve(false);
         }
       });
 
-      ytdlp.on('error', (error) => {
-        console.error('❌ yt-dlp download process error:', error);
-        resolve(false);
-      });
+      ytdlp.on('error', () => resolve(false));
     });
   }
 
@@ -369,239 +779,9 @@ export class YtdlpStreamingService {
     const artist = song.artistName;
     const title = song.title;
 
-    if (!title) {
-      return null;
-    }
-
-    if (artist) {
-      return `${artist} ${title}`;
-    }
-
+    if (!title) return null;
+    if (artist) return `${artist} ${title}`;
     return title;
-  }
-
-  private async downloadAndStream(
-    song: Song,
-    res: Response,
-  ): Promise<void> {
-    const timestamp = Date.now();
-    const streamDirName = `${song.id}-${timestamp}`;
-    const streamDir = path.join(this.tempDir, streamDirName);
-    const cacheKey = this.getCacheKey(song.id);
-
-    await mkdir(streamDir, { recursive: true });
-    console.log('📁 Created stream directory:', streamDir);
-
-    const passThrough = new PassThrough();
-
-    const download: ActiveDownload = {
-      process: null,
-      activeStreams: new Set([passThrough]),
-      filePath: null,
-      isComplete: false,
-      streamDir,
-      watcher: null,
-      jobName: `ytdlp-${streamDirName}`,
-    };
-
-    this.activeDownloads.set(cacheKey, download);
-
-    let headersSent = false;
-    let streamingStarted = false;
-    let notFound = false;
-    let fileDetected = false;
-    let clientDisconnected = false;
-
-    const cleanup = async (shouldDeleteFile: boolean = false) => {
-      if (download.watcher) {
-        download.watcher.close();
-        download.watcher = null;
-        console.log('🛑 File watcher closed');
-      }
-      this.activeDownloads.delete(cacheKey);
-
-      // Clean up temp directory
-      setTimeout(async () => {
-        try {
-          if (shouldDeleteFile && download.filePath && existsSync(download.filePath)) {
-            await unlink(download.filePath);
-            console.log('🗑️  Deleted temporary file');
-          }
-
-          if (existsSync(streamDir)) {
-            const files = await readdir(streamDir);
-            for (const file of files) {
-              await unlink(path.join(streamDir, file));
-            }
-            await import('fs/promises').then(fs => fs.rm(streamDir, { recursive: true }));
-            console.log('🧹 Cleaned up stream directory');
-          }
-        } catch (err) {
-          console.error('Failed to clean up:', err);
-        }
-      }, 5000);
-    };
-
-    res.on('close', () => {
-      console.log('❌ Client disconnected');
-      clientDisconnected = true;
-      download.activeStreams.delete(passThrough);
-      passThrough.end();
-
-      if (download.activeStreams.size === 0 && !download.isComplete) {
-        console.log('🛑 No more clients, aborting download');
-
-        if (download.process && !download.process.killed) {
-          download.process.kill('SIGTERM');
-          console.log('🛑 Killed yt-dlp process');
-        }
-
-        cleanup(true);
-      }
-    });
-
-    res.on('error', (error) => {
-      console.error('❌ Response error in downloadAndStream:', error);
-    });
-
-    download.watcher = watch(streamDir, { persistent: false }, async (eventType, filename) => {
-      if (!filename || fileDetected) return;
-
-      console.log(`👁️ File watcher event: ${eventType} - ${filename}`);
-
-      if (filename === streamDirName) {
-        console.log('⏭️ Skipping directory event');
-        return;
-      }
-
-      const audioExtensions = ['.mp3', '.flac', '.opus', '.m4a', '.ogg', '.webm', '.aac', '.wav'];
-      const isAudioFile = audioExtensions.some(ext =>
-        filename.endsWith(ext) || filename.endsWith(ext + '.part')
-      );
-
-      if (!isAudioFile) {
-        console.log('⏭️ Skipping non-audio file:', filename);
-        return;
-      }
-
-      const filePath = path.join(streamDir, filename);
-      const isPartFile = filename.endsWith('.part');
-
-      if (isPartFile) {
-        console.log('📥 Detected .part file, checking if ready for streaming:', filename);
-      }
-
-      fileDetected = true;
-      console.log('🔒 File detection locked');
-
-      let attempts = 0;
-      const maxAttempts = 100;
-      let fileReady = false;
-
-      while (attempts < maxAttempts && !fileReady) {
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-        if (!existsSync(filePath)) {
-          attempts++;
-          continue;
-        }
-
-        try {
-          const stats = await import('fs/promises').then(fs => fs.stat(filePath));
-          const threshold = isPartFile ? 32768 : 65536;
-
-          if (stats.size >= threshold) {
-            fileReady = true;
-            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 300}ms`);
-          } else {
-            console.log(`⏳ File has ${stats.size} bytes, waiting for ${threshold}...`);
-            attempts++;
-          }
-        } catch (error) {
-          attempts++;
-        }
-      }
-
-      if (!fileReady) {
-        console.log('❌ File never became ready with sufficient data');
-        fileDetected = false;
-        return;
-      }
-
-      streamingStarted = true;
-      download.filePath = filePath;
-      this.streamCache.set(cacheKey, filePath);
-
-      console.log('📁 FILE DETECTED via watcher:', filePath);
-
-      if (headersSent) {
-        console.log('⚠️ Headers already sent, skipping');
-        return;
-      }
-
-      headersSent = true;
-
-      const ext = path.extname(filename).replace('.part', '').toLowerCase();
-      const mimeType = this.getMimeType(ext);
-      const currentSize = (await import('fs/promises').then(fs => fs.stat(filePath))).size;
-
-      console.log('✅ Starting progressive stream with', currentSize, 'bytes');
-
-      res.writeHead(200, {
-        'Content-Type': mimeType,
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      });
-
-      console.log('✅ Headers sent');
-      passThrough.pipe(res);
-
-      passThrough.on('error', (error) => {
-        console.error('❌ PassThrough error:', error);
-      });
-
-      console.log('🎬 Starting progressive tailing from position 0');
-      this.startProgressiveTailing(filePath, download, 0);
-    });
-
-    console.log('👁️ File watcher started for:', streamDir);
-
-    // Try to get source URL or search YouTube
-    let sourceUrl = song.youtubeLink;
-
-    if (!sourceUrl) {
-      console.log('🔍 No YouTube URL found, searching...');
-      const success = await this.searchAndDownloadYouTubeTrack(song, streamDir, download);
-
-      if (!success) {
-        console.error('❌ Search and download failed');
-        notFound = true;
-
-        if (!headersSent) {
-          res.status(404).json({
-            error: 'Track not found',
-            message: 'Could not find this track on YouTube'
-          });
-        }
-
-        await cleanup(true);
-      }
-
-      return;
-    }
-
-    // Download from known URL
-    console.log('📺 Using saved YouTube URL:', sourceUrl);
-    const success = await this.downloadVideo(sourceUrl, streamDir, download);
-
-    if (!success && !headersSent) {
-      res.status(404).json({
-        error: 'Download failed',
-        message: 'Could not download track from YouTube'
-      });
-      await cleanup(true);
-    }
   }
 
   private startProgressiveTailing(
@@ -612,11 +792,8 @@ export class YtdlpStreamingService {
     let lastPosition = startPosition;
     let currentFilePath = initialFilePath;
     let isReading = false;
-    let totalBytesBroadcast = 0;
     let fileNotFoundCount = 0;
     const maxFileNotFoundAttempts = 5;
-
-    console.log('🎬 Starting progressive tailing from position:', startPosition);
 
     const tailInterval = setInterval(async () => {
       if (isReading) return;
@@ -630,20 +807,11 @@ export class YtdlpStreamingService {
       try {
         isReading = true;
 
-        // Handle .part file renaming
         if (currentFilePath.endsWith('.part')) {
           const withoutPart = currentFilePath.replace('.part', '');
           if (existsSync(withoutPart) && !existsSync(currentFilePath)) {
-            console.log('📝 File renamed from .part:', withoutPart);
             currentFilePath = withoutPart;
             download.filePath = currentFilePath;
-
-            const cacheEntry = Array.from(this.activeDownloads.entries())
-            .find(([_, d]) => d === download);
-            if (cacheEntry) {
-              this.streamCache.set(cacheEntry[0], currentFilePath);
-            }
-
             fileNotFoundCount = 0;
           }
         }
@@ -651,54 +819,30 @@ export class YtdlpStreamingService {
         if (!existsSync(currentFilePath)) {
           fileNotFoundCount++;
 
-          // Check for converted file
           if (fileNotFoundCount === 1) {
             const dir = path.dirname(currentFilePath);
             const baseNameWithoutExt = path.basename(currentFilePath, path.extname(currentFilePath)).replace('.part', '');
 
             const possibleExtensions = ['.mp3', '.m4a', '.opus', '.ogg'];
-            let convertedFile: string | null = null;
 
             for (const ext of possibleExtensions) {
               const testPath = path.join(dir, baseNameWithoutExt + ext);
               if (existsSync(testPath)) {
-                convertedFile = testPath;
-                console.log('🔄 Found converted file:', convertedFile);
-                break;
+                currentFilePath = testPath;
+                download.filePath = currentFilePath;
+                fileNotFoundCount = 0;
+                lastPosition = 0;
+                isReading = false;
+                return;
               }
-            }
-
-            if (convertedFile) {
-              currentFilePath = convertedFile;
-              download.filePath = currentFilePath;
-
-              const cacheEntry = Array.from(this.activeDownloads.entries())
-              .find(([_, d]) => d === download);
-              if (cacheEntry) {
-                this.streamCache.set(cacheEntry[0], currentFilePath);
-              }
-
-              fileNotFoundCount = 0;
-              lastPosition = 0;
-              console.log('✅ Switched to converted file, continuing tailing');
-              isReading = false;
-              return;
             }
           }
 
           if (fileNotFoundCount >= maxFileNotFoundAttempts) {
-            if (download.isComplete) {
-              console.log('✅ Download complete, file has been processed');
-              clearInterval(tailInterval);
-              download.activeStreams.forEach(stream => {
-                if (!stream.destroyed) {
-                  stream.end();
-                }
-              });
-            } else {
-              console.log('⚠️ File disappeared but download not marked complete');
-            }
             clearInterval(tailInterval);
+            download.activeStreams.forEach(stream => {
+              if (!stream.destroyed) stream.end();
+            });
           }
 
           isReading = false;
@@ -711,37 +855,21 @@ export class YtdlpStreamingService {
         const currentSize = stats.size;
 
         if (currentSize > lastPosition) {
-          const bytesToRead = currentSize - lastPosition;
-          console.log('📖 Reading new data:', bytesToRead, 'bytes from position', lastPosition);
-
           const chunk = await this.readFileChunk(currentFilePath, lastPosition, currentSize - 1);
-          totalBytesBroadcast += chunk.length;
 
-          console.log('📡 Broadcasting', chunk.length, 'bytes to', download.activeStreams.size, 'clients');
-
-          let successfulWrites = 0;
           download.activeStreams.forEach((passThrough) => {
             if (!passThrough.destroyed) {
-              const written = passThrough.write(chunk);
-              if (written) {
-                successfulWrites++;
-              }
+              passThrough.write(chunk);
             }
           });
-
-          console.log('✅ Successfully wrote to', successfulWrites, '/', download.activeStreams.size, 'clients');
 
           lastPosition = currentSize;
         }
 
         if (download.isComplete && currentSize === lastPosition) {
           clearInterval(tailInterval);
-          console.log('✅ Progressive streaming completed');
-          console.log('📊 Total bytes broadcast:', totalBytesBroadcast);
           download.activeStreams.forEach(stream => {
-            if (!stream.destroyed) {
-              stream.end();
-            }
+            if (!stream.destroyed) stream.end();
           });
         }
 
@@ -757,11 +885,7 @@ export class YtdlpStreamingService {
     }, 150);
   }
 
-  private async readFileChunk(
-    filePath: string,
-    start: number,
-    end: number
-  ): Promise<Buffer> {
+  private async readFileChunk(filePath: string, start: number, end: number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       const stream = createReadStream(filePath, { start, end });
@@ -772,49 +896,39 @@ export class YtdlpStreamingService {
     });
   }
 
-  private async handleStreamComplete(song: Song, download: ActiveDownload): Promise<void> {
+  private async handleStreamComplete(song: Song | undefined, download: ActiveDownload): Promise<void> {
+    if (!song) return;
+
     try {
-      // Reload song to get latest playCount
       const freshSong = await this.songRepository.findOne({ where: { id: song.id } });
       if (!freshSong) return;
 
-      console.log(`📊 Stream complete. PlayCount: ${freshSong.playCount}`);
+      const finalTempPath = download.filePath;
+      if (!finalTempPath || !existsSync(finalTempPath)) return;
 
+      const stats = await import('fs/promises').then(fs => fs.stat(finalTempPath));
+      const ext = path.extname(finalTempPath).toLowerCase();
+      const quality = this.determineQuality(finalTempPath, stats.size);
+
+      // Check if song should be permanently cached (10+ plays)
       if (freshSong.playCount >= 10) {
-        // Move to permanent storage
-        const finalTempPath = download.filePath;
-
-        if (!finalTempPath || !existsSync(finalTempPath)) {
-          console.error('❌ Downloaded file not found:', finalTempPath);
-          return;
-        }
-
-        console.log('💾 Song popular (playCount >= 10), saving to permanent storage');
-
-        const stats = await import('fs/promises').then(fs => fs.stat(finalTempPath));
-        const ext = path.extname(finalTempPath).toLowerCase();
-        const quality = this.determineQuality(finalTempPath, stats.size);
-
-        console.log(`📊 Quality determined: ${quality}`);
+        console.log('💾 Song popular, saving to permanent storage');
 
         const timestamp = Date.now();
         const permanentFileName = `${freshSong.id}-${quality}-${timestamp}${ext}`;
         const permanentPath = path.join(this.downloadsDir, permanentFileName);
 
         await import('fs/promises').then(fs => fs.copyFile(finalTempPath, permanentPath));
-        console.log('✅ Copied to permanent storage:', permanentPath);
 
         freshSong.standardPath = permanentPath;
         freshSong.standardQuality = quality;
-
         await this.songRepository.save(freshSong);
-        console.log('✅ Song entity updated with permanent path');
 
-        // Update cache
         const cacheKey = this.getCacheKey(freshSong.id);
         this.streamCache.set(cacheKey, permanentPath);
       } else {
-        console.log(`🗑️  Song not popular enough (playCount: ${freshSong.playCount}), will delete temp file`);
+        console.log(`🕐 Song not popular enough (${freshSong.playCount} plays), keeping temporary`);
+        // Note: MusicService will handle scheduling deletion via scheduleTemporaryFileDeletion
       }
     } catch (error) {
       console.error('❌ Error in handleStreamComplete:', error);
@@ -824,11 +938,8 @@ export class YtdlpStreamingService {
   private determineQuality(filePath: string, fileSize: number): string {
     const ext = path.extname(filePath).toLowerCase();
 
-    if (ext === '.flac') {
-      return 'flac';
-    }
+    if (ext === '.flac') return 'flac';
 
-    // Size-based quality estimation for MP3
     if (fileSize > 10 * 1024 * 1024) {
       return '320';
     } else if (fileSize > 7 * 1024 * 1024) {
@@ -864,7 +975,7 @@ export class YtdlpStreamingService {
       const dirs = await readdir(this.tempDir);
       for (const dir of dirs) {
         const dirPath = path.join(this.tempDir, dir);
-        await rmdir(dirPath, { recursive: true });
+        await import('fs/promises').then(fs => fs.rm(dirPath, { recursive: true }));
       }
       console.log('✅ Temp cache cleared');
     } catch (error) {

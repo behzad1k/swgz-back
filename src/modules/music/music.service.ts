@@ -1,13 +1,14 @@
 import { forwardRef, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Response } from 'express';
 import { existsSync } from 'fs';
-import { stat } from 'fs/promises';
+import { stat, unlink } from 'fs/promises';
 import { FindOneOptions, In, Like, Repository } from 'typeorm';
 import { applyMapping, EXTERNAL_MAPPINGS } from '../../config/mapping.config';
-import { SearchFilter } from '../../types';
+import { DownloadStatus, QualityPreference, SearchFilter, StreamInfo } from '../../types';
 import { SEARCH_FILTERS } from '../../utils/enums';
 import { LibraryService } from '../library/library.service';
-import { User } from '../users/entities/user.entity';
+import { SubscriptionPlan, User } from '../users/entities/user.entity';
 import { AmazonService } from './amazon.service';
 import { DiscogsService } from './discogs.service';
 import { Album } from './entities/album.entity';
@@ -15,11 +16,17 @@ import { Artist } from './entities/artist.entity';
 import { SearchHistory } from './entities/search-history.entity';
 import { Song } from './entities/song.entity';
 import { LastfmService } from './lastfm.service';
+import { StreamingService } from './streaming.service';
+import { YtdlpStreamingService } from './YTDLPStreaming.service';
 
 type MusicProvider = 'lastFM' | 'amazon';
 
+
 @Injectable()
 export class MusicService {
+  // Track temporary downloads for cleanup
+  private temporaryDownloads = new Map<string, { filePath: string; scheduledDeletion: NodeJS.Timeout }>();
+
   constructor(
     @InjectRepository(Song)
     private songRepository: Repository<Song>,
@@ -34,12 +41,323 @@ export class MusicService {
     private lastFMService: LastfmService,
     private discogsService: DiscogsService,
     private amazonService: AmazonService,
+    private streamingService: StreamingService,
+    private ytdlpStreamingService: YtdlpStreamingService,
   ) {}
+
   private readonly musicProvider: MusicProvider = process.env.MUSIC_PROVIDER as MusicProvider || 'lastFM';
 
   private getMusicService() {
     return this.musicProvider === 'amazon' ? this.amazonService : this.lastFMService;
   }
+
+  /**
+   * Get stream info - checks cache and returns file info or download status
+   */
+  async getStreamInfo(
+    songId: string,
+    quality?: QualityPreference,
+    userSubscriptionPlan?: SubscriptionPlan
+  ): Promise<StreamInfo> {
+    const song = await this.songRepository.findOne({ where: { id: songId } });
+
+    if (!song) {
+      throw new NotFoundException('Song not found');
+    }
+
+    // Helper to get file info
+    const getFileInfo = async (filePath: string, quality: string) => {
+      const stats = await stat(filePath);
+      const ext = filePath.split('.').pop()?.toLowerCase() || 'mp3';
+      const mimeTypes: Record<string, string> = {
+        mp3: 'audio/mpeg',
+        flac: 'audio/flac',
+        ogg: 'audio/ogg',
+        opus: 'audio/opus',
+        wav: 'audio/wav',
+        m4a: 'audio/mp4',
+        aac: 'audio/aac',
+        webm: 'audio/webm',
+      };
+
+      return {
+        status: 'ready' as const,
+        ready: true,
+        filePath,
+        quality,
+        duration: song.duration,
+        fileSize: stats.size,
+        mimeType: mimeTypes[ext] || 'audio/mpeg',
+      };
+    };
+
+    // Case 1: Quality specified
+    if (quality) {
+      if (quality === 'flac') {
+        // Check for cached FLAC
+        if (song.flacPath && existsSync(song.flacPath)) {
+          return getFileInfo(song.flacPath, 'flac');
+        }
+
+        // Check if FLAC is marked as unavailable
+        if (song.hasFlac === false) {
+          throw new NotFoundException('FLAC quality is not available for this track');
+        }
+
+        // Check download status
+        const downloadStatus = this.streamingService.getDownloadStatus(songId, quality);
+        if (downloadStatus.status !== 'not_started') {
+          return {
+            status: downloadStatus.status as any,
+            ready: downloadStatus.status === 'ready',
+            progress: downloadStatus.progress,
+            message: downloadStatus.message,
+          };
+        }
+
+        // Need to start download
+        return {
+          status: 'not_started',
+          ready: false,
+          message: 'FLAC download not started. Call /download endpoint or stream with ?quality=flac',
+        };
+      } else {
+        // Standard quality requested
+        if (song.standardPath && existsSync(song.standardPath)) {
+          return getFileInfo(song.standardPath, song.standardQuality || quality);
+        }
+
+        // Check download status
+        const downloadStatus = this.ytdlpStreamingService.getDownloadStatus(songId);
+        if (downloadStatus.status !== 'not_started') {
+          return {
+            status: downloadStatus.status as any,
+            ready: downloadStatus.status === 'ready',
+            progress: downloadStatus.progress,
+            message: downloadStatus.message,
+          };
+        }
+
+        return {
+          status: 'not_started',
+          ready: false,
+          message: 'Download not started. Call /download endpoint or stream endpoint',
+        };
+      }
+    }
+
+    // Case 2: No quality specified - auto-select best
+    // Check standard path first
+    if (song.standardPath && existsSync(song.standardPath)) {
+      return getFileInfo(song.standardPath, song.standardQuality || 'standard');
+    }
+
+    // Check FLAC for premium users
+    if (song.flacPath && existsSync(song.flacPath) && userSubscriptionPlan === SubscriptionPlan.PREMIUM) {
+      return getFileInfo(song.flacPath, 'flac');
+    }
+
+    // Check if any download is in progress
+    const ytdlpStatus = this.ytdlpStreamingService.getDownloadStatus(songId);
+    if (ytdlpStatus.status !== 'not_started') {
+      return {
+        status: ytdlpStatus.status as any,
+        ready: ytdlpStatus.status === 'ready',
+        progress: ytdlpStatus.progress,
+        message: ytdlpStatus.message,
+      };
+    }
+
+    return {
+      status: 'not_started',
+      ready: false,
+      message: 'No cached file available. Download will start on stream request.',
+    };
+  }
+
+  /**
+   * Stream a song - handles routing to appropriate streaming service
+   */
+  async streamSong(
+    songId: string,
+    res: Response,
+    quality?: QualityPreference,
+    userSubscriptionPlan?: SubscriptionPlan
+  ): Promise<void> {
+    const song = await this.songRepository.findOne({ where: { id: songId } });
+
+    if (!song) {
+      throw new NotFoundException('Song not found');
+    }
+
+    if (song.standardPath && existsSync(song.standardPath)) {
+      console.log(`📂 Streaming cached file: ${song.standardPath}`);
+      return this.streamFromFile(song.standardPath, res, song.standardQuality || 'standard');
+    }
+
+    // Route to appropriate streaming service
+    // if (quality === 'flac') {
+      await this.streamingService.streamSong(songId, res, quality, userSubscriptionPlan);
+    // } else {
+    //
+    //   // No cache, use YTDLP streaming service
+    //   await this.ytdlpStreamingService.streamSong(songId, res);
+    // }
+  }
+
+  /**
+   * Download and cache a song without streaming
+   */
+  async downloadSong(
+    songId: string,
+    quality?: QualityPreference,
+    userSubscriptionPlan?: SubscriptionPlan
+  ): Promise<{ status: string; message: string; songId: string; quality?: string }> {
+    const song = await this.songRepository.findOne({ where: { id: songId } });
+
+    if (!song) {
+      throw new NotFoundException('Song not found');
+    }
+
+    // Check if already cached
+    if (quality === 'flac') {
+      if (song.flacPath && existsSync(song.flacPath)) {
+        return {
+          status: 'already_cached',
+          message: 'FLAC quality already cached',
+          songId,
+          quality: 'flac',
+        };
+      }
+
+      if (song.hasFlac === false) {
+        throw new NotFoundException('FLAC quality is not available for this track');
+      }
+
+      // Start download
+      await this.streamingService.startBackgroundDownload(songId, quality);
+      return {
+        status: 'downloading',
+        message: 'FLAC download started. Check /download-status for progress.',
+        songId,
+        quality: 'flac',
+      };
+    } else {
+      if (song.standardPath && existsSync(song.standardPath)) {
+        return {
+          status: 'already_cached',
+          message: `Quality ${song.standardQuality} already cached`,
+          songId,
+          quality: song.standardQuality,
+        };
+      }
+
+      // Start download
+      await this.ytdlpStreamingService.startBackgroundDownload(songId);
+      return {
+        status: 'downloading',
+        message: 'Download started. Check /download-status for progress.',
+        songId,
+      };
+    }
+  }
+
+  /**
+   * Get download status
+   */
+  async getDownloadStatus(
+    songId: string,
+    quality?: QualityPreference
+  ): Promise<DownloadStatus> {
+    if (quality === 'flac') {
+      return this.streamingService.getDownloadStatus(songId, quality);
+    }
+    return this.ytdlpStreamingService.getDownloadStatus(songId);
+  }
+
+  /**
+   * Schedule temporary file deletion
+   */
+  scheduleTemporaryFileDeletion(songId: string, filePath: string, delayMs: number = 3600000): void {
+    // Cancel existing scheduled deletion if any
+    const existing = this.temporaryDownloads.get(songId);
+    if (existing) {
+      clearTimeout(existing.scheduledDeletion);
+    }
+
+    // Schedule new deletion
+    const timeout = setTimeout(async () => {
+      try {
+        if (existsSync(filePath)) {
+          await unlink(filePath);
+          console.log(`🗑️  Deleted temporary file: ${filePath}`);
+        }
+        this.temporaryDownloads.delete(songId);
+      } catch (error) {
+        console.error(`Failed to delete temporary file ${filePath}:`, error);
+      }
+    }, delayMs);
+
+    this.temporaryDownloads.set(songId, { filePath, scheduledDeletion: timeout });
+    console.log(`⏰ Scheduled deletion of ${filePath} in ${delayMs / 1000 / 60} minutes`);
+  }
+
+  /**
+   * Cancel scheduled deletion (e.g., when file becomes permanent)
+   */
+  cancelScheduledDeletion(songId: string): void {
+    const existing = this.temporaryDownloads.get(songId);
+    if (existing) {
+      clearTimeout(existing.scheduledDeletion);
+      this.temporaryDownloads.delete(songId);
+      console.log(`✅ Cancelled scheduled deletion for song ${songId}`);
+    }
+  }
+
+  /**
+   * Stream from a file
+   */
+  private async streamFromFile(filePath: string, res: Response, quality: string): Promise<void> {
+    try {
+      const { createReadStream } = await import('fs');
+      const stats = await stat(filePath);
+      const ext = filePath.split('.').pop()?.toLowerCase() || 'mp3';
+      const mimeTypes: Record<string, string> = {
+        mp3: 'audio/mpeg',
+        flac: 'audio/flac',
+        ogg: 'audio/ogg',
+        opus: 'audio/opus',
+        wav: 'audio/wav',
+        m4a: 'audio/mp4',
+        aac: 'audio/aac',
+        webm: 'audio/webm',
+      };
+
+      res.writeHead(200, {
+        'Content-Type': mimeTypes[ext] || 'audio/mpeg',
+        'Content-Length': stats.size,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=3600',
+        'X-Quality': quality,
+      });
+
+      const stream = createReadStream(filePath);
+      stream.pipe(res);
+
+      stream.on('error', (error) => {
+        console.error('❌ Stream error:', error);
+        if (!res.headersSent) {
+          res.status(500).end();
+        }
+      });
+    } catch (error) {
+      console.error('❌ streamFromFile error:', error);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    }
+  }
+
   async search(query: string, user: User, filter?: SearchFilter) {
     await this.searchHistoryRepository.save({
       userId: user.id,
@@ -56,7 +374,6 @@ export class MusicService {
         musicService.artistSearch(query, 7),
         musicService.albumSearch(query, 7)
       ]);
-
 
       // Get cached results from all types
       const [cachedSongs, cachedArtists, cachedAlbums] = await Promise.all([
@@ -82,7 +399,6 @@ export class MusicService {
         musicService.removeCachedDuplicateSongs(cachedSongs, tracks),
         SEARCH_FILTERS.track
       );
-      console.log(artists);
 
       const formattedArtists = await musicService.formatResult(
         musicService.removeCachedDuplicateArtists(cachedArtists, artists),
@@ -93,7 +409,7 @@ export class MusicService {
         musicService.removeCachedDuplicateAlbums(cachedAlbums, albums),
         SEARCH_FILTERS.album,
       );
-      console.log(formattedArtists);
+
       // Save new results
       try {
         await Promise.all([
@@ -127,7 +443,7 @@ export class MusicService {
         const songResults = await musicService.trackSearch(query);
 
         const formattedSongs = await musicService.formatResult(
-        musicService.removeCachedDuplicateSongs(cachedSongs, applyMapping(songResults, EXTERNAL_MAPPINGS[this.musicProvider].track)),
+          musicService.removeCachedDuplicateSongs(cachedSongs, applyMapping(songResults, EXTERNAL_MAPPINGS[this.musicProvider].track)),
           SEARCH_FILTERS.track
         );
 
@@ -178,6 +494,7 @@ export class MusicService {
         return await this.discogsService.search(query);
     }
   }
+
   async prepareTrackToPlay(songData: Partial<Song>, user: User) {
     const findOptions: FindOneOptions<Song> = {
       where: {
@@ -256,7 +573,6 @@ export class MusicService {
 
   async fetchAlbumInfo(albumId: string): Promise<Album> {
     const album = await this.albumRepository.findOne({ where: { id: albumId } });
-    // TODO:
     return album;
   }
 
@@ -332,8 +648,6 @@ export class MusicService {
       await this.artistRepository.save(artist);
     }
 
-    // TODO: similar artists
-
     return artist;
   }
 
@@ -363,12 +677,11 @@ export class MusicService {
         quality: 'flac',
         format: 'flac',
         available: exists,
-        unavailable: song.hasFlac === false, // Marked as unavailable if hasFlac is explicitly false
+        unavailable: song.hasFlac === false,
         path: exists ? song.flacPath : undefined,
         size: fileSize,
       });
     } else if (song.hasFlac === false) {
-      // FLAC was searched but not found
       availableQualities.push({
         quality: 'flac',
         format: 'flac',
@@ -390,7 +703,6 @@ export class MusicService {
         size: fileSize,
       });
     } else if (song.standardQuality) {
-      // Standard quality was searched but not found (path is null but quality is set)
       availableQualities.push({
         quality: song.standardQuality,
         format: 'mp3',
@@ -399,9 +711,8 @@ export class MusicService {
       });
     }
 
-    // Check if track is completely unavailable (standardQuality = '128' with no path)
+    // Check if track is completely unavailable
     if (song.standardQuality === '128' && !song.standardPath) {
-      // This indicates the track is not available at all on sldl
       availableQualities.push({
         quality: 'unavailable',
         format: 'none',
@@ -410,7 +721,6 @@ export class MusicService {
       });
     }
 
-    // Separate available and unavailable
     const available = availableQualities.filter(q => q.available);
     const unavailable = availableQualities.filter(q => q.unavailable);
 
@@ -428,9 +738,6 @@ export class MusicService {
     };
   }
 
-  /**
-   * Get song with all quality information
-   */
   async getSongWithQualities(songId: string) {
     const song = await this.songRepository.findOne({
       where: { id: songId },
@@ -451,12 +758,9 @@ export class MusicService {
     };
   }
 
-  /**
-   * Get quality fallback chain for a requested quality
-   */
   getQualityFallbackChain(requestedQuality: string): string[] {
     const fallbackMap: Record<string, string[]> = {
-      'flac': ['flac'], // No fallback for FLAC
+      'flac': ['flac'],
       '320': ['320', 'v0', '256', '192', '128'],
       'v0': ['v0', '320', '256', '192', '128'],
       '256': ['256', '320', 'v0', '192', '128'],
@@ -468,9 +772,6 @@ export class MusicService {
     return fallbackMap[requestedQuality] || ['320', 'v0', '256'];
   }
 
-  /**
-   * Reset unavailable quality flag (e.g., for retrying)
-   */
   async resetUnavailableQuality(songId: string, quality: string): Promise<void> {
     const song = await this.songRepository.findOne({
       where: { id: songId },
@@ -481,20 +782,17 @@ export class MusicService {
     }
 
     if (quality === 'flac') {
-      // Reset FLAC unavailability
       if (song.hasFlac === false) {
         song.hasFlac = null;
         await this.songRepository.save(song);
         console.log(`✅ Reset unavailable flag for FLAC quality of song ${songId}`);
       }
     } else if (quality === 'all') {
-      // Reset all quality flags
       song.hasFlac = null;
       song.standardQuality = null;
       await this.songRepository.save(song);
       console.log(`✅ Reset all unavailable flags for song ${songId}`);
     } else {
-      // Reset standard quality if it matches the requested quality and has no path
       if (song.standardQuality === quality && !song.standardPath) {
         song.standardQuality = null;
         await this.songRepository.save(song);

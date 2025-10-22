@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Query, Param, UseGuards, Body, Res, NotFoundException, Req, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Query, Param, UseGuards, Body, Res, NotFoundException, Req, HttpCode, Sse } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
+import { from, interval, map, Observable, switchMap, takeWhile } from 'rxjs';
 import { QualityPreference, SearchFilter } from '../../types';
 import { DFiStreamingService } from './DFiStreaming.service';
 import { PlaySongDto } from './dto/music.dto';
@@ -33,28 +34,48 @@ export class MusicController {
   }
 
   /**
-   * Stream endpoint - handles both GET and HEAD requests
+   * Get stream info - returns immediately with file info or download status
    */
-  @Get('stream/:id')
-  async streamSong(
+  @Get('stream-info/:id')
+  async getStreamInfo(
     @Param('id') songId: string,
     @CurrentUser() user: User,
-    @Res() res: Response,
     @Query('quality') quality?: QualityPreference,
   ) {
-    // Only premium users can stream FLAC
+    // Only premium users can request FLAC
     if (quality === 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
-      return res.status(403).json({
-        error: 'FLAC streaming requires premium subscription',
-        requestedQuality: 'flac',
-      });
+      throw new NotFoundException('FLAC streaming requires premium subscription');
     }
 
-    // Pass user's subscription plan to streaming service
-    //
-    // await this.dfiStreamingService.streamSong(songId, res, quality, user.subscriptionPlan);
-    if (quality && quality === 'flac') await this.streamingService.streamSong(songId, res, quality, user.subscriptionPlan);
-    else await this.ytdlpStreamingService.streamSong(songId, res);
+    return this.musicService.getStreamInfo(songId, quality, user.subscriptionPlan);
+  }
+
+  /**
+   * Download and cache a song without streaming
+   */
+  @Post('download/:id')
+  async downloadSong(
+    @Param('id') songId: string,
+    @CurrentUser() user: User,
+    @Query('quality') quality?: QualityPreference,
+  ) {
+    // Only premium users can download FLAC
+    if (quality === 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
+      throw new NotFoundException('FLAC download requires premium subscription');
+    }
+
+    return this.musicService.downloadSong(songId, 'flac', user.subscriptionPlan);
+  }
+
+  /**
+   * Check download status for a song
+   */
+  @Get('download-status/:id')
+  async getDownloadStatus(
+    @Param('id') songId: string,
+    @Query('quality') quality?: QualityPreference,
+  ) {
+    return this.musicService.getDownloadStatus(songId, quality);
   }
 
   @Get('recent-searches')
@@ -98,5 +119,134 @@ export class MusicController {
     @Param('quality') quality: string,
   ) {
     return this.musicService.resetUnavailableQuality(songId, quality);
+  }
+
+
+  /**
+   * Trigger download - returns immediately
+   */
+  @Post('download/:id')
+  async triggerDownload(
+    @Param('id') songId: string,
+    @CurrentUser() user: User,
+    @Query('quality') quality?: QualityPreference,
+  ) {
+    if (quality === 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
+      throw new NotFoundException('FLAC download requires premium subscription');
+    }
+
+    // Check if already cached
+    const streamInfo = await this.musicService.getStreamInfo(songId, 'flac', user.subscriptionPlan);
+
+    if (streamInfo.ready) {
+      return {
+        status: 'ready',
+        message: 'File already available',
+        streamUrl: `/music/stream/${songId}${quality ? `?quality=flac}` : ''}`,
+        quality: 'flac',
+        duration: streamInfo.duration,
+        fileSize: streamInfo.fileSize,
+      };
+    }
+
+    // Start download
+    await this.musicService.downloadSong(songId, 'flac', user.subscriptionPlan);
+
+    return {
+      status: 'accepted',
+      message: 'Download started',
+      progressUrl: `/music/progress/${songId}${quality ? `?quality=flac}` : ''}`,
+      songId,
+    };
+  }
+
+  /**
+   * SSE endpoint for download progress
+   */
+  @Sse('progress/:id')
+  downloadProgress(
+    @Param('id') songId: string,
+    @Query('quality') quality?: QualityPreference,
+  ): Observable<MessageEvent> {
+    return interval(500).pipe(
+      switchMap(() => from(this.musicService.getDownloadStatus(songId, 'flac'))),
+      map(status => {
+        // Determine event type based on status
+        let eventType = 'progress';
+        let data: any = {
+          status: status.status,
+          progress: status.progress,
+        };
+
+        // Add metadata when available
+        if (status.quality || status.duration || status.fileSize) {
+          data = {
+            ...data,
+            quality: 'flac',
+            duration: status.duration,
+            fileSize: status.fileSize,
+          };
+        }
+
+        // Send ready event when complete
+        if (status.status === 'ready') {
+          eventType = 'ready';
+          data = {
+            ...data,
+            streamUrl: `/music/stream/${songId}${quality ? `?quality=flac}` : ''}`,
+          };
+        }
+
+        // Send error event on failure
+        if (status.status === 'failed') {
+          eventType = 'error';
+          data = {
+            ...data,
+            error: status.error,
+          };
+        }
+
+        return {
+          type: eventType,
+          data: data,
+        } as MessageEvent;
+      }),
+      // Stop sending events after ready or failed
+      takeWhile((event) => {
+        return event.type !== 'ready' && event.type !== 'error';
+      }, true), // true = include the final event
+    );
+  }
+
+  /**
+   * Stream endpoint - only called when file is ready
+   */
+  @Get('stream/:id')
+  async streamSong(
+    @Param('id') songId: string,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+    @Query('quality') quality?: QualityPreference,
+  ) {
+    if (quality === 'flac' && user.subscriptionPlan !== SubscriptionPlan.PREMIUM) {
+      return res.status(403).json({
+        error: 'FLAC streaming requires premium subscription',
+      });
+    }
+
+    // Check if file is ready
+    const streamInfo = await this.musicService.getStreamInfo(songId, 'flac', user.subscriptionPlan);
+
+    if (!streamInfo.ready) {
+      return res.status(404).json({
+        error: 'File not ready',
+        status: streamInfo.status,
+        progress: streamInfo.progress,
+        message: 'File is still downloading. Please wait for ready event.',
+      });
+    }
+
+    // File is ready, start streaming
+    await this.musicService.streamSong(songId, res, 'flac', user.subscriptionPlan);
   }
 }
