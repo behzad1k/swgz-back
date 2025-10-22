@@ -443,7 +443,7 @@ export class StreamingService {
 
         try {
           const stats = await import('fs/promises').then(fs => fs.stat(incompleteFilePath));
-          if (stats.size >= 3145728) {
+          if (stats.size >= 4145728) {
             fileReady = true;
             download.fileSize = stats.size;
             console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 700}ms`);
