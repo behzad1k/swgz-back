@@ -154,20 +154,18 @@ export class LastfmService {
     return array2.filter((externalTrack) => {
       const key = `${externalTrack.name.toLowerCase()}:${(externalTrack.artist || externalTrack.artist?.name).toString()?.toLowerCase()}`;
       return !cachedLinks.has(externalTrack.url)
-        && !cachedMBIDs.has(externalTrack.mbid)
-        && !cachedKeys.has(key);
+        || !cachedMBIDs.has(externalTrack.mbid)
+        || !cachedKeys.has(key);
     });
   }
 
   removeCachedDuplicateArtists(cachedArray: Artist[], array2: any[]) {
     const cachedLinks = new Set(cachedArray.map(t => t.lastFMLink));
     const cachedMBIDs = new Set(cachedArray.map(t => t.mbid));
-    const cachedNames = new Set(cachedArray.map(t => t.name));
 
     return array2.filter((externalArtist) => {
       return !cachedLinks.has(externalArtist.url)
-        && !cachedMBIDs.has(externalArtist.mbid)
-        && !cachedNames.has(externalArtist.name);
+        || !cachedMBIDs.has(externalArtist.mbid)
     });
   }
 
@@ -177,7 +175,7 @@ export class LastfmService {
 
     return array2.filter((externalArtist) => {
       return !cachedMBIDs.has(externalArtist.mbid)
-        && !cachedNames.has(externalArtist.name);
+        || !cachedNames.has(externalArtist.name);
     });
   }
 

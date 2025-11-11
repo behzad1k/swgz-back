@@ -446,7 +446,7 @@ export class MusicService {
         const songResults = await musicService.trackSearch(query);
 
         const formattedSongs = await musicService.formatResult(
-          musicService.removeCachedDuplicateSongs(cachedSongs, applyMapping(songResults, EXTERNAL_MAPPINGS[this.musicProvider].track)),
+          musicService.removeCachedDuplicateSongs(cachedSongs, songResults),
           SEARCH_FILTERS.track
         );
 
@@ -475,19 +475,19 @@ export class MusicService {
           newResult = newResult.filter(e => e.acin);
         }
 
-        let formattedResult = await musicService.formatResult(
-          musicService.removeCachedDuplicateArtists(cachedResult, applyMapping(newResult, EXTERNAL_MAPPINGS[this.musicProvider].artist)),
+        const formattedArtists = await musicService.formatResult(
+          musicService.removeCachedDuplicateArtists(cachedResult, newResult),
           SEARCH_FILTERS.artist,
           'pfp'
         );
 
         try {
-          await this.artistRepository.save(formattedResult as Artist[]);
+          await this.artistRepository.save(formattedArtists as Artist[]);
         } catch (err) {
           console.error(err);
         }
 
-        return [...cachedResult, ...formattedResult]
+        return [...cachedResult, ...formattedArtists]
         .sort((a, b) => b.externalListeners - a.externalListeners);
 
       case 'album':

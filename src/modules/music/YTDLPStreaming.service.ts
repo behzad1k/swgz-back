@@ -911,7 +911,7 @@ export class YtdlpStreamingService {
       const quality = this.determineQuality(finalTempPath, stats.size);
 
       // Check if song should be permanently cached (10+ plays)
-      if (freshSong.playCount >= 10) {
+      if (freshSong.playCount >= 0) {
         console.log('💾 Song popular, saving to permanent storage');
 
         const timestamp = Date.now();

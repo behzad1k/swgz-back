@@ -4,7 +4,7 @@ export const EXTERNAL_MAPPINGS = {
       title: 'name',
       externalListens: 'listeners',
       lastFMLink: 'url',
-      artistName: (data: any) => typeof data.artist == 'string' ? data.artist : data.artist.name,
+      artistName: (data: any) => data.artist ? typeof data.artist == 'string' ? data.artist : data.artist.name : '',
       albumName: 'albumName',
       albumCover: 'albumCover',
       mbid: 'mbid',
