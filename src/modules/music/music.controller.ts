@@ -255,6 +255,6 @@ export class MusicController {
     }
 
     // File is ready, start streaming
-    await this.musicService.streamSong(songId, res, quality, user.subscriptionPlan);
+    await this.musicService.streamSong(songId, res, user, quality);
   }
 }

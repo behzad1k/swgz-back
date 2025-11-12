@@ -187,8 +187,8 @@ export class MusicService {
   async streamSong(
     songId: string,
     res: Response,
+    user: User,
     quality?: QualityPreference,
-    userSubscriptionPlan?: SubscriptionPlan
   ): Promise<void> {
     const song = await this.songRepository.findOne({ where: { id: songId } });
 
@@ -196,14 +196,15 @@ export class MusicService {
       throw new NotFoundException('Song not found');
     }
 
+    await this.libraryService.recordPlay(song.id, user)
+
     if (song.standardPath && existsSync(song.standardPath)) {
       console.log(`📂 Streaming cached file: ${song.standardPath}`);
       return this.streamFromFile(song.standardPath, res, song.standardQuality || 'standard');
     }
-
     // Route to appropriate streaming service
     // if (quality === 'flac') {
-      await this.getMusicService().streamSong(songId, res, quality, userSubscriptionPlan);
+    await this.getMusicService().streamSong(songId, res, quality, user.subscriptionPlan);
     // } else {
     //
     //   // No cache, use YTDLP streaming service
@@ -511,8 +512,6 @@ export class MusicService {
       },
     };
     const song = await this.getOrCreateSong(songData, findOptions);
-
-    await this.libraryService.recordPlay(song.id, user);
 
     return song;
   }
