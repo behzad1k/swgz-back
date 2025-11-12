@@ -19,7 +19,8 @@ import { LastfmService } from './lastfm.service';
 import { StreamingService } from './streaming.service';
 import { YtdlpStreamingService } from './YTDLPStreaming.service';
 
-type MusicProvider = 'lastFM' | 'amazon';
+type MusicInfoProvider = 'lastFM' | 'amazon';
+type MusicProvider = 'ytdlp' | 'sldl';
 
 
 @Injectable()
@@ -45,10 +46,15 @@ export class MusicService {
     private ytdlpStreamingService: YtdlpStreamingService,
   ) {}
 
-  private readonly musicProvider: MusicProvider = process.env.MUSIC_PROVIDER as MusicProvider || 'lastFM';
+  private readonly musicInfoProvider: MusicInfoProvider = process.env.MUSIC_INFO_PROVIDER as MusicInfoProvider || 'lastFM';
+  private readonly musicProvider: MusicProvider = process.env.MUSIC_PROVIDER as MusicProvider || 'sldl';
+
+  private getMusicInfoService() {
+    return this.musicInfoProvider === 'amazon' ? this.amazonService : this.lastFMService;
+  }
 
   private getMusicService() {
-    return this.musicProvider === 'amazon' ? this.amazonService : this.lastFMService;
+    return this.musicProvider === 'ytdlp' ? this.ytdlpStreamingService : this.streamingService;
   }
 
   /**
@@ -105,7 +111,7 @@ export class MusicService {
         }
 
         // Check download status
-        const downloadStatus = this.streamingService.getDownloadStatus(songId, quality);
+        const downloadStatus = this.getMusicService().getDownloadStatus(songId, quality);
         if (downloadStatus.status !== 'not_started') {
           return {
             status: downloadStatus.status as any,
@@ -128,7 +134,7 @@ export class MusicService {
         }
 
         // Check download status
-        const downloadStatus = this.ytdlpStreamingService.getDownloadStatus(songId);
+        const downloadStatus = this.getMusicService().getDownloadStatus(songId);
         if (downloadStatus.status !== 'not_started') {
           return {
             status: downloadStatus.status as any,
@@ -158,7 +164,7 @@ export class MusicService {
     }
 
     // Check if any download is in progress
-    const ytdlpStatus = this.ytdlpStreamingService.getDownloadStatus(songId);
+    const ytdlpStatus = this.getMusicService().getDownloadStatus(songId);
     if (ytdlpStatus.status !== 'not_started') {
       return {
         status: ytdlpStatus.status as any,
@@ -197,7 +203,7 @@ export class MusicService {
 
     // Route to appropriate streaming service
     // if (quality === 'flac') {
-      await this.streamingService.streamSong(songId, res, quality, userSubscriptionPlan);
+      await this.getMusicService().streamSong(songId, res, quality, userSubscriptionPlan);
     // } else {
     //
     //   // No cache, use YTDLP streaming service
@@ -235,7 +241,7 @@ export class MusicService {
       }
 
       // Start download
-      await this.streamingService.startBackgroundDownload(songId, quality);
+      await this.getMusicService().startBackgroundDownload(songId, quality);
       return {
         status: 'downloading',
         message: 'FLAC download started. Check /download-status for progress.',
@@ -253,7 +259,7 @@ export class MusicService {
       }
 
       // Start download
-      await this.ytdlpStreamingService.startBackgroundDownload(songId);
+      await this.getMusicService().startBackgroundDownload(songId);
       return {
         status: 'downloading',
         message: 'Download started. Check /download-status for progress.',
@@ -270,13 +276,12 @@ export class MusicService {
     quality?: QualityPreference
   ): Promise<DownloadStatus> {
     if (quality === 'flac') {
-      const status = this.streamingService.getDownloadStatus(songId, quality);
+      const status = this.getMusicService().getDownloadStatus(songId, quality);
       return {
         ...status,
-        filenameChanged: status.filenameChanged, // Pass through
       };
     }
-    return this.ytdlpStreamingService.getDownloadStatus(songId);
+    return this.getMusicService().getDownloadStatus(songId);
   }
   /**
    * Schedule temporary file deletion
@@ -368,7 +373,7 @@ export class MusicService {
       filter: filter || 'all'
     });
 
-    const musicService = this.getMusicService();
+    const musicService = this.getMusicInfoService();
 
     // If no filter specified, search everything
     if (!filter || filter === 'all') {
@@ -469,7 +474,7 @@ export class MusicService {
         let newResult = await musicService.artistSearch(query, 20);
 
         // Filter by mbid only if using LastFM (Amazon doesn't have mbid)
-        if (this.musicProvider === 'lastFM') {
+        if (this.musicInfoProvider === 'lastFM') {
           newResult = newResult.filter(e => e.mbid);
         } else {
           newResult = newResult.filter(e => e.acin);
