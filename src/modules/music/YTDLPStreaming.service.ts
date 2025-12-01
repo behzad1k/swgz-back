@@ -325,26 +325,42 @@ export class YtdlpStreamingService {
   private setupFileWatcher(download: ActiveDownload, streamDir: string, song: Song): void {
     let fileDetected = false;
 
+    console.log('👀 Setting up file watcher for:', streamDir);
+
     download.watcher = watch(streamDir, { persistent: false }, async (eventType, filename) => {
+      console.log(`👁️ File event: ${eventType}, file: ${filename}`);
+
       if (!filename || fileDetected) return;
 
-      const audioExtensions = ['.mp3', '.flac', '.opus', '.m4a', '.ogg', '.webm', '.aac', '.wav'];
-      const isAudioFile = audioExtensions.some(ext =>
+      // Accept audio-only formats (m4a, opus, ogg) and their .part files
+      const streamableAudioExtensions = ['.m4a', '.opus', '.ogg', '.webm'];
+
+      const isStreamableAudio = streamableAudioExtensions.some(ext =>
         filename.endsWith(ext) || filename.endsWith(ext + '.part')
       );
 
-      if (!isAudioFile) return;
+      console.log(`🔍 File: ${filename}, isStreamableAudio: ${isStreamableAudio}`);
+
+      if (!isStreamableAudio) {
+        console.log('⏭️ Skipping: not a streamable audio file');
+        return;
+      }
 
       fileDetected = true;
-      console.log('🔒 File detection locked');
+      console.log('🔒 File detection locked for:', filename);
 
       const filePath = path.join(streamDir, filename);
       const isPartFile = filename.endsWith('.part');
 
-      // Wait for file to be ready
+      // Lower threshold for aggressive streaming
+      const threshold = isPartFile ? 32768 : 65536; // 32KB for .part, 64KB for complete
+
+      console.log(`📏 Threshold: ${threshold} bytes (${isPartFile ? '.part file' : 'complete file'})`);
+
       let attempts = 0;
       const maxAttempts = 100;
       let fileReady = false;
+      let lastSize = 0;
 
       while (attempts < maxAttempts && !fileReady) {
         await new Promise(resolve => setTimeout(resolve, 300));
@@ -356,12 +372,17 @@ export class YtdlpStreamingService {
 
         try {
           const stats = await import('fs/promises').then(fs => fs.stat(filePath));
-          const threshold = isPartFile ? 32768 : 65536;
+          const currentSize = stats.size;
 
-          if (stats.size >= threshold) {
+          if (currentSize !== lastSize) {
+            console.log(`📊 Size: ${currentSize} bytes (need ${threshold})`);
+            lastSize = currentSize;
+          }
+
+          if (currentSize >= threshold) {
             fileReady = true;
-            download.fileSize = stats.size;
-            console.log(`✅ File ready with ${stats.size} bytes after ${attempts * 300}ms`);
+            download.fileSize = currentSize;
+            console.log(`✅ File ready! Size: ${currentSize} bytes`);
           } else {
             attempts++;
           }
@@ -371,7 +392,7 @@ export class YtdlpStreamingService {
       }
 
       if (!fileReady) {
-        console.log('❌ File never became ready with sufficient data');
+        console.log(`❌ File never became ready. Final size: ${lastSize}`);
         fileDetected = false;
         return;
       }
@@ -385,11 +406,10 @@ export class YtdlpStreamingService {
       const cacheKey = this.getCacheKey(song.id);
       this.streamCache.set(cacheKey, filePath);
 
-      console.log('📁 FILE DETECTED:', filePath);
-      console.log('📊 Quality:', download.quality);
+      console.log('✅ FILE READY FOR STREAMING:', filePath);
 
-      // Start progressive tailing for active streams
       if (download.activeStreams.size > 0) {
+        console.log(`📡 Starting progressive tailing`);
         this.startProgressiveTailing(filePath, download, 0);
       }
     });
@@ -689,15 +709,15 @@ export class YtdlpStreamingService {
     const ytdlpPath = process.env.YTDLP_PATH || 'yt-dlp';
     const outputTemplate = path.join(streamDir, '%(title)s.%(ext)s');
 
-    // SIMPLIFIED ARGS - match your working manual command more closely
+    // Download best audio directly WITHOUT conversion
+    // This allows streaming while downloading
     const downloadArgs = [
       videoUrl,
-      '-x',  // Extract audio
-      '--audio-format', 'mp3',
-      '--audio-quality', '0',  // Best quality (0-9, 0 is best)
+      '-f', 'bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio',  // Prefer streamable formats
       '-o', outputTemplate,
       '--newline',
-      '--progress',  // Show progress
+      '--progress',
+      // NO --extract-audio or --audio-format!
     ];
 
     const ffmpegPath = process.env.FFMPEG_PATH;
@@ -705,7 +725,7 @@ export class YtdlpStreamingService {
       downloadArgs.push('--ffmpeg-location', ffmpegPath);
     }
 
-    console.log('🚀 Running SIMPLIFIED yt-dlp command:');
+    console.log('🚀 Running STREAMING-FRIENDLY yt-dlp command:');
     console.log(`   ${ytdlpPath} ${downloadArgs.join(' ')}`);
 
     const { spawn } = await import('child_process');
@@ -734,15 +754,12 @@ export class YtdlpStreamingService {
 
     return new Promise((resolve) => {
       ytdlp.on('close', async (code) => {
-        console.log(`🏁 Exit code: ${code}, started: ${downloadStarted}`);
+        console.log(`🏁 Exit: ${code}, started: ${downloadStarted}`);
 
-        // List files
-        try {
-          const files = await import('fs/promises').then(fs => fs.readdir(streamDir));
-          console.log('📂 Files:', files);
-        } catch (err) {}
+        const files = await import('fs/promises').then(fs => fs.readdir(streamDir)).catch(() => []);
+        console.log('📂 Files:', files);
 
-        if (code === 0) {
+        if (code === 0 && downloadStarted) {
           await this.handleStreamComplete(song, download);
           resolve(true);
         } else {
@@ -756,7 +773,6 @@ export class YtdlpStreamingService {
       });
     });
   }
-
   private buildSearchQuery(song: Song): string | null {
     const artist = song.artistName;
     const title = song.title;
