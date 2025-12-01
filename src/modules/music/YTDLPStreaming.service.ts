@@ -678,6 +678,8 @@ export class YtdlpStreamingService {
     }
   }
 
+
+
   private async downloadVideo(
     videoUrl: string,
     streamDir: string,
@@ -687,22 +689,15 @@ export class YtdlpStreamingService {
     const ytdlpPath = process.env.YTDLP_PATH || 'yt-dlp';
     const outputTemplate = path.join(streamDir, '%(title)s.%(ext)s');
 
+    // SIMPLIFIED ARGS - match your working manual command more closely
     const downloadArgs = [
       videoUrl,
-      '-f', 'bestaudio/best',
-      '-o', outputTemplate,
-      '--extract-audio',
+      '-x',  // Extract audio
       '--audio-format', 'mp3',
-      '--audio-quality', '320',
-      '--no-playlist',
-      '--no-check-certificates',
-      '--prefer-free-formats',
-      '--add-metadata',
-      '--embed-thumbnail',
+      '--audio-quality', '0',  // Best quality (0-9, 0 is best)
+      '-o', outputTemplate,
       '--newline',
-      '--no-warnings',
-      '--ignore-errors',
-      '--print-json',
+      '--progress',  // Show progress
     ];
 
     const ffmpegPath = process.env.FFMPEG_PATH;
@@ -710,60 +705,44 @@ export class YtdlpStreamingService {
       downloadArgs.push('--ffmpeg-location', ffmpegPath);
     }
 
+    console.log('🚀 Running SIMPLIFIED yt-dlp command:');
+    console.log(`   ${ytdlpPath} ${downloadArgs.join(' ')}`);
+
     const { spawn } = await import('child_process');
     const ytdlp = spawn(ytdlpPath, downloadArgs);
     download.process = ytdlp;
 
-    let jsonOutput = '';
-    let notFound = false;
+    let downloadStarted = false;
 
     ytdlp.stdout.on('data', (data: Buffer) => {
-      const output = data.toString().trim();
+      const output = data.toString();
+      console.log('📤', output);
 
-      if (output.startsWith('{')) {
-        jsonOutput += output;
-      } else {
-        const progressMatch = output.match(/(\d+\.?\d*)%/);
-        if (progressMatch) {
-          download.progress = Math.min(90, parseFloat(progressMatch[1]));
-        }
+      if (output.includes('[download]')) {
+        downloadStarted = true;
       }
 
-      if (output.toLowerCase().includes('not available') ||
-        output.toLowerCase().includes('not found')) {
-        notFound = true;
+      const progressMatch = output.match(/(\d+\.?\d*)%/);
+      if (progressMatch) {
+        download.progress = Math.min(90, parseFloat(progressMatch[1]));
       }
     });
 
     ytdlp.stderr.on('data', (data: Buffer) => {
-      const errorOutput = data.toString().trim();
-      if (errorOutput && !errorOutput.includes('WARNING')) {
-        console.error('yt-dlp stderr:', errorOutput);
-      }
+      console.log('📥', data.toString());
     });
 
     return new Promise((resolve) => {
       ytdlp.on('close', async (code) => {
-        if (code === 0 && !notFound) {
-          if (jsonOutput && song && !this.preferAudioVersion) {
-            try {
-              const videoInfo = JSON.parse(jsonOutput);
-              song.youtubeLink = videoInfo.webpage_url || videoInfo.url;
-              song.youtubeId = videoInfo.id;
-              song.duration = videoInfo.duration;
-              download.duration = videoInfo.duration;
-              song.metadata = {
-                ...song.metadata,
-                youtubeTitle: videoInfo.title,
-                youtubeDuration: videoInfo.duration,
-                youtubeUploader: videoInfo.uploader,
-              };
-              await this.songRepository.save(song);
-            } catch (parseError) {
-              console.warn('⚠️ Could not parse video info');
-            }
-          }
+        console.log(`🏁 Exit code: ${code}, started: ${downloadStarted}`);
 
+        // List files
+        try {
+          const files = await import('fs/promises').then(fs => fs.readdir(streamDir));
+          console.log('📂 Files:', files);
+        } catch (err) {}
+
+        if (code === 0) {
           await this.handleStreamComplete(song, download);
           resolve(true);
         } else {
@@ -771,7 +750,10 @@ export class YtdlpStreamingService {
         }
       });
 
-      ytdlp.on('error', () => resolve(false));
+      ytdlp.on('error', (error) => {
+        console.error('❌ Process error:', error);
+        resolve(false);
+      });
     });
   }
 

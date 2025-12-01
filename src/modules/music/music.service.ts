@@ -22,8 +22,6 @@ import { YtdlpStreamingService } from './YTDLPStreaming.service';
 type MusicInfoProvider = 'lastFM' | 'amazon';
 type MusicProvider = 'ytdlp' | 'sldl';
 
-
-
 @Injectable()
 export class MusicService {
   // Track temporary downloads for cleanup
