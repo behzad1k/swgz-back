@@ -717,6 +717,7 @@ export class YtdlpStreamingService {
       '-o', outputTemplate,
       '--newline',
       '--progress',
+      '--no-part'
       // NO --extract-audio or --audio-format!
     ];
 
