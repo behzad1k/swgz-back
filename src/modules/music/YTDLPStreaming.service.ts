@@ -713,7 +713,7 @@ export class YtdlpStreamingService {
     // This allows streaming while downloading
     const downloadArgs = [
       videoUrl,
-      '-f', 'bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio',  // Prefer streamable formats
+      '-f', '251/bestaudio[ext=opus]/bestaudio[ext=m4a]/bestaudio',  // Prefer streamable formats
       '-o', outputTemplate,
       '--newline',
       '--progress',
