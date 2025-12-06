@@ -577,9 +577,30 @@ export class MusicService {
     return relatedSongs;
   }
 
-  async fetchAlbumInfo(albumId: string): Promise<Album> {
-    const album = await this.albumRepository.findOne({ where: { id: albumId } });
-    return album;
+  async fetchAlbumInfo(albumId: string): Promise<any> {
+    const musicService = this.getMusicInfoService();
+    let album = await this.albumRepository.findOne({ where: { id: albumId } });
+
+    const albumInfo: any = await musicService.getAlbumInfo(album)
+    const [formattedAlbumInfo] = await musicService.formatResult(
+      [albumInfo],
+      SEARCH_FILTERS.album
+    )
+
+    formattedAlbumInfo.songs = await musicService.formatResult(
+      formattedAlbumInfo.tracks.track,
+      SEARCH_FILTERS.track
+    )
+    delete formattedAlbumInfo.tracks
+
+    try {
+        // await this.albumRepository.save(formattedAlbumInfo)
+      // await this.songRepository.save(formattedAlbumInfo.songs)
+      } catch (err) {
+        console.error('Error saving general search results:', err);
+      }
+
+      return formattedAlbumInfo
   }
 
   async fetchArtistInfo(artistId: string): Promise<Artist> {

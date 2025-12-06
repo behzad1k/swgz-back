@@ -143,6 +143,21 @@ export class LastfmService {
     return albums.data.topalbums.album;
   }
 
+  async getAlbumInfo(album: Album): Promise<LastFM.Album>{
+    const params: any = {
+      method: 'album.getinfo',
+      api_key: this.lastFmApiKey,
+      format: 'json',
+      album: album.title,
+      artist: album.artistName
+    }
+    if (album.mbid) params.mbid = album.mbid;
+
+    const albums = await axios.get('http://ws.audioscrobbler.com/2.0/', { params });
+
+    return albums.data.album;
+  }
+
 
   removeCachedDuplicateSongs(cachedArray: Song[], array2: any[]) {
     const cachedLinks = new Set(cachedArray.map(t => t.lastFMLink));

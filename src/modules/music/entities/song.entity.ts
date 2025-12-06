@@ -87,6 +87,9 @@ export class Song {
   @Column({ default: null })
   rankForArtist: number;
 
+  @Column({ default: null })
+  rankInAlbum: number;
+
   @Column({ default: false })
   isExplicit: boolean;
 

@@ -246,6 +246,20 @@ export class AmazonService {
     }
   }
 
+  async getAlbumInfo(album: Album): Promise<any> {
+    try {
+      const response = await axios.get(`${this.baseUrl}/album`, {
+        // params: { id: albumId },
+        headers: this.getHeaders(),
+        timeout: 10000
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Amazon get album error:', error?.response?.data || error?.message);
+      return null;
+    }
+  }
+
   removeCachedDuplicateSongs(cachedArray: Song[], array2: any[]) {
     const cachedAsins = new Set(cachedArray.map(t => t.asin).filter(Boolean));
     const cachedKeys = new Set(

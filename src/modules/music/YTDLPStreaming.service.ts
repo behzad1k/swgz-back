@@ -718,7 +718,6 @@ export class YtdlpStreamingService {
       '--newline',
       '--progress',
       '--no-part'
-      // NO --extract-audio or --audio-format!
     ];
 
     const ffmpegPath = process.env.FFMPEG_PATH;

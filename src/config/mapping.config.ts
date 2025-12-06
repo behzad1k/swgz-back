@@ -26,10 +26,11 @@ export const EXTERNAL_MAPPINGS = {
       lastFMLink: 'url',
       externalListens: 'listeners',
       externalPlays: 'playcount',
-      pfp: 'pfp',
-      rankForArtist: (data: any)=> data['@attr']?.rank,
-      artistName: (data: any)=> data.artist.name,
-      albumCover: (data: any) => data.image ? (Array.isArray(data.image) ? data.image[data.image.length -1]['#text'] : data.image['#text']) : ''
+      tracks: (data: any) => data.tracks,
+      artistName: (data: any)=> data.artist,
+      albumCover: (data: any) => data.image ? (Array.isArray(data.image) ? data.image[data.image.length -1]['#text'] : data.image['#text']) : '',
+      releaseDate: (data: any)=> data.wiki ? data.wiki?.published : null,
+      description: (data: any) => data.wiki? data?.wiki?.content : null
     }
   },
   discogs: {

@@ -88,6 +88,12 @@ export class MusicController {
     return this.musicService.getSimilarTracks(songId);
   }
 
+  @Get('album/:id')
+  async getAlbum(@Param('id') albumId: string) {
+    if (!albumId || albumId == 'undefined') throw new NotFoundException('Album not found');
+    return this.musicService.fetchAlbumInfo(albumId);
+  }
+
   @Get('artist/:id')
   async getArtist(@Param('id') artistId: string) {
     if (!artistId || artistId == 'undefined') throw new NotFoundException('Artist not found');
