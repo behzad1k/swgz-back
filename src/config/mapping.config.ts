@@ -27,7 +27,7 @@ export const EXTERNAL_MAPPINGS = {
       externalListens: 'listeners',
       externalPlays: 'playcount',
       tracks: (data: any) => data.tracks,
-      artistName: (data: any)=> data.artist,
+      artistName: (data: any)=> data.artist?.name || data.artist,
       albumCover: (data: any) => data.image ? (Array.isArray(data.image) ? data.image[data.image.length -1]['#text'] : data.image['#text']) : '',
       releaseDate: (data: any)=> data.wiki ? data.wiki?.published : null,
       description: (data: any) => data.wiki? data?.wiki?.content : null

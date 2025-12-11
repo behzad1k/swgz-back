@@ -2,7 +2,7 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   deploy:
@@ -17,12 +17,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Build
         env:
           PORT: ${{ vars.PORT }}
           APP_URL: ${{ vars.APP_URL }}
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
           DB_HOST: ${{ vars.DB_HOST }}
           DB_PORT: ${{ vars.DB_PORT }}
           DB_USERNAME: ${{ vars.DB_USERNAME }}
