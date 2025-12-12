@@ -10,8 +10,8 @@ export interface TelegramAuthData {
 	last_name?: string;
 	username?: string;
 	photo_url?: string;
-	auth_date: number;
-	hash: string;
+	language_code?: string;
+	allows_write_to_pm?: boolean;
 }
 
 @Injectable()
@@ -21,46 +21,76 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 	}
 
 	async validate(req: Request): Promise<TelegramAuthData> {
-		const telegramData = req.body as TelegramAuthData;
+		const { initData } = req.body;
 
-		if (!telegramData || !telegramData.hash) {
-			throw new UnauthorizedException("Invalid Telegram data");
+		if (!initData) {
+			throw new UnauthorizedException("Missing initData");
+		}
+
+		// Parse the URL-encoded initData string
+		const params = new URLSearchParams(initData);
+		const hash = params.get("hash");
+
+		if (!hash) {
+			throw new UnauthorizedException("Missing hash in initData");
 		}
 
 		// Verify Telegram data authenticity
-		const isValid = this.verifyTelegramAuth(telegramData);
+		const isValid = this.verifyTelegramAuth(initData, hash);
 		if (!isValid) {
 			throw new UnauthorizedException("Invalid Telegram authentication");
 		}
 
-		// Check if auth is not too old (24 hours)
-		const authDate = new Date(telegramData.auth_date * 1000);
-		const now = new Date();
-		const hoursDiff = (now.getTime() - authDate.getTime()) / (1000 * 60 * 60);
-
-		if (hoursDiff > 24) {
-			throw new UnauthorizedException("Telegram authentication expired");
+		// Extract and parse user data
+		const userDataStr = params.get("user");
+		if (!userDataStr) {
+			throw new UnauthorizedException("Missing user data");
 		}
 
-		return telegramData;
+		const userData = JSON.parse(
+			decodeURIComponent(userDataStr),
+		) as TelegramAuthData;
+
+		// Check if auth is not too old (24 hours)
+		const authDateStr = params.get("auth_date");
+		if (authDateStr) {
+			const authDate = new Date(parseInt(authDateStr) * 1000);
+			const now = new Date();
+			const hoursDiff = (now.getTime() - authDate.getTime()) / (1000 * 60 * 60);
+
+			if (hoursDiff > 24) {
+				throw new UnauthorizedException("Telegram authentication expired");
+			}
+		}
+
+		return userData;
 	}
 
-	private verifyTelegramAuth(data: TelegramAuthData): boolean {
+	private verifyTelegramAuth(initData: string, hash: string): boolean {
 		const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
 		if (!botToken) {
 			throw new Error("TELEGRAM_BOT_TOKEN is not configured");
 		}
 
-		const { hash, ...authData } = data;
+		// Parse the initData
+		const params = new URLSearchParams(initData);
 
-		// Create data check string
-		const dataCheckArr = Object.keys(authData)
-			.filter((key) => authData[key] !== undefined)
-			.sort()
-			.map((key) => `${key}=${authData[key]}`);
+		// Remove hash from params for verification
+		params.delete("hash");
 
-		const dataCheckString = dataCheckArr.join("\n");
+		// Sort parameters alphabetically and create data-check-string
+		const dataCheckArray: string[] = [];
+		const sortedKeys = Array.from(params.keys()).sort();
+
+		for (const key of sortedKeys) {
+			const value = params.get(key);
+			if (value) {
+				dataCheckArray.push(`${key}=${value}`);
+			}
+		}
+
+		const dataCheckString = dataCheckArray.join("\n");
 
 		// Create secret key from bot token
 		const secretKey = crypto.createHash("sha256").update(botToken).digest();
