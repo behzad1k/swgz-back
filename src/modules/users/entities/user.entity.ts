@@ -5,6 +5,7 @@ import {
 	CreateDateColumn,
 	UpdateDateColumn,
 	OneToMany,
+	Index,
 } from "typeorm";
 import { Exclude } from "class-transformer";
 import { Playlist } from "../../playlist/entities/playlist.entity";
@@ -23,12 +24,19 @@ export enum SubscriptionPlan {
 	PREMIUM = "maxx",
 }
 
+export enum AuthProvider {
+	LOCAL = "local",
+	GOOGLE = "google",
+	TELEGRAM = "telegram",
+}
+
 @Entity("users")
 export class User {
 	@PrimaryGeneratedColumn("uuid")
 	id: string;
 
 	@Column({ unique: true })
+	@Index()
 	email: string;
 
 	@Column({ nullable: true })
@@ -36,6 +44,7 @@ export class User {
 	password: string;
 
 	@Column({ unique: true, nullable: true })
+	@Index()
 	username: string;
 
 	@Column({ nullable: true })
@@ -47,8 +56,41 @@ export class User {
 	@Column({ default: false })
 	isPrivate: boolean;
 
-	@Column({ nullable: true })
+	// Google OAuth fields
+	@Column({ nullable: true, unique: true })
+	@Index()
 	googleId: string;
+
+	// Telegram Mini App fields
+	@Column({ nullable: true, unique: true })
+	@Index()
+	telegramId: string;
+
+	@Column({ nullable: true })
+	telegramUsername: string;
+
+	@Column({ nullable: true })
+	telegramFirstName: string;
+
+	@Column({ nullable: true })
+	telegramLastName: string;
+
+	@Column({ nullable: true })
+	telegramPhotoUrl: string;
+
+	@Column({ default: false })
+	isTelegramPremium: boolean;
+
+	@Column({ nullable: true })
+	telegramLanguageCode: string;
+
+	// Auth provider tracking
+	@Column({
+		type: "enum",
+		enum: AuthProvider,
+		default: AuthProvider.LOCAL,
+	})
+	authProvider: AuthProvider;
 
 	@Column({ default: false })
 	isEmailConfirmed: boolean;
@@ -62,6 +104,7 @@ export class User {
 	resetPasswordToken: string;
 
 	@Column({ unique: true, nullable: true })
+	@Index()
 	apiKey: string;
 
 	@Column({
@@ -83,6 +126,10 @@ export class User {
 
 	@Column({ type: "int", default: 0 })
 	swagz: number;
+
+	// Last seen tracking
+	@Column({ type: "timestamp", nullable: true })
+	lastSeenAt: Date;
 
 	@OneToMany(() => Playlist, (playlist) => playlist.user)
 	playlists: Playlist[];

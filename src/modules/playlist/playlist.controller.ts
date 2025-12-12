@@ -29,8 +29,6 @@ import { CurrentUser } from "../../common/decorators/decorators";
 import { User, SubscriptionPlan } from "../users/entities/user.entity";
 import { RequireSubscription } from "../../common/decorators/decorators";
 import { SubscriptionGuard } from "../../common/guards/guards";
-import { FileService } from "../files/file.service";
-import { FileType } from "../files/entities/file.entity";
 
 @Controller("playlists")
 @UseGuards(AuthGuard(["jwt", "api-key"]))
@@ -38,7 +36,6 @@ export class PlaylistController {
 	constructor(
 		private playlistService: PlaylistService,
 		private importService: ImportService,
-		private fileService: FileService,
 	) {}
 
 	@Get()
