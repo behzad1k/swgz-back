@@ -177,6 +177,11 @@ export class AuthService {
 			user = this.userRepository.create({
 				telegramId,
 				username: finalUsername,
+				firstName: telegramData.first_name,
+				lastName: telegramData.last_name,
+				languageCode: telegramData.language_code,
+				isPremium: telegramData.is_premium || false,
+				allowsWriteToPm: telegramData.allows_write_to_pm || false,
 				isEmailConfirmed: true, // Telegram users are pre-verified
 				apiKey,
 				avatarUrl: telegramData.photo_url,
@@ -185,11 +190,27 @@ export class AuthService {
 
 			await this.userRepository.save(user);
 		} else {
-			// Update avatar if changed
-			if (telegramData.photo_url && user.avatarUrl !== telegramData.photo_url) {
+			// Update user data from Telegram
+			user.firstName = telegramData.first_name;
+			user.lastName = telegramData.last_name;
+			user.languageCode = telegramData.language_code;
+			user.isPremium = telegramData.is_premium || false;
+			user.allowsWriteToPm = telegramData.allows_write_to_pm || false;
+
+			if (telegramData.photo_url) {
 				user.avatarUrl = telegramData.photo_url;
-				await this.userRepository.save(user);
 			}
+
+			if (telegramData.username) {
+				const existingUser = await this.userRepository.findOne({
+					where: { username: telegramData.username },
+				});
+				if (!existingUser) {
+					user.username = telegramData.username;
+				}
+			}
+
+			await this.userRepository.save(user);
 		}
 
 		const payload = { sub: user.id, email: user.email, role: user.role };
@@ -205,6 +226,10 @@ export class AuthService {
 				role: user.role,
 				subscriptionPlan: user.subscriptionPlan,
 				avatarUrl: user.avatarUrl,
+				firstName: user.firstName,
+				lastName: user.lastName,
+				languageCode: user.languageCode,
+				isPremium: user.isPremium,
 			},
 		};
 	}
