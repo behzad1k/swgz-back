@@ -91,8 +91,10 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		// Parse the initData
 		const params = new URLSearchParams(initData);
 
-		// Remove hash from params for verification
+		// Remove hash and signature from params for verification
+		// Telegram includes 'signature' but it's not part of the hash calculation
 		params.delete("hash");
+		params.delete("signature");
 
 		// Sort parameters alphabetically and create data-check-string
 		const dataCheckArray: string[] = [];
