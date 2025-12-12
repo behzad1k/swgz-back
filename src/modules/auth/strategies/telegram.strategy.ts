@@ -3,6 +3,7 @@ import { PassportStrategy } from "@nestjs/passport";
 import { Strategy } from "passport-custom";
 import { Request } from "express";
 import * as crypto from "crypto";
+import { log } from "console";
 
 export interface TelegramAuthData {
 	id: number;
@@ -82,7 +83,7 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 	private verifyTelegramAuth(initData: string, hash: string): boolean {
 		const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
-		console.log("Bot token present:", !!botToken);
+		console.log("Bot token present:", botToken);
 
 		if (!botToken) {
 			throw new Error("TELEGRAM_BOT_TOKEN is not configured");
