@@ -12,11 +12,8 @@ import {
 	User,
 	UserRole,
 	SubscriptionPlan,
-	AuthProvider,
 } from "../users/entities/user.entity";
 import { EmailService } from "./email.service";
-import { TelegramService } from "./telegram.service";
-import { TelegramUserDto } from "./dto/telegram-auth.dto";
 
 @Injectable()
 export class AuthService {
@@ -25,12 +22,8 @@ export class AuthService {
 		private userRepository: Repository<User>,
 		private jwtService: JwtService,
 		private emailService: EmailService,
-		private telegramService: TelegramService,
 	) {}
 
-	/**
-	 * Traditional email/password signup
-	 */
 	async signUp(email: string, password: string, username: string) {
 		const existingUser = await this.userRepository.findOne({
 			where: { email },
@@ -50,7 +43,6 @@ export class AuthService {
 			emailConfirmToken,
 			apiKey,
 			subscriptionPlan: SubscriptionPlan.FREE,
-			authProvider: AuthProvider.LOCAL,
 		});
 
 		await this.userRepository.save(user);
@@ -59,9 +51,6 @@ export class AuthService {
 		return { message: "All good. Check your email" };
 	}
 
-	/**
-	 * Email confirmation
-	 */
 	async confirmEmail(token: string) {
 		const user = await this.userRepository.findOne({
 			where: { emailConfirmToken: token },
@@ -78,9 +67,6 @@ export class AuthService {
 		return { message: "Email confirmed successfully" };
 	}
 
-	/**
-	 * Traditional email/password login
-	 */
 	async login(email: string, password: string) {
 		const user = await this.userRepository.findOne({ where: { email } });
 
@@ -88,7 +74,7 @@ export class AuthService {
 			throw new UnauthorizedException("Invalid credentials");
 		}
 
-		if (!user.isEmailConfirmed && user.authProvider === AuthProvider.LOCAL) {
+		if (!user.isEmailConfirmed) {
 			throw new UnauthorizedException("Please confirm your email first");
 		}
 
@@ -96,10 +82,6 @@ export class AuthService {
 		if (!isPasswordValid) {
 			throw new UnauthorizedException("Invalid credentials");
 		}
-
-		// Update last seen
-		user.lastSeenAt = new Date();
-		await this.userRepository.save(user);
 
 		const payload = { sub: user.id, email: user.email, role: user.role };
 		const accessToken = this.jwtService.sign(payload);
@@ -110,25 +92,17 @@ export class AuthService {
 			user: {
 				id: user.id,
 				email: user.email,
-				username: user.username,
 				role: user.role,
 				subscriptionPlan: user.subscriptionPlan,
 				apiKey: user.apiKey,
-				authProvider: user.authProvider,
 			},
 		};
 	}
 
-	/**
-	 * Get user information
-	 */
 	async getUser(user: User) {
 		return this.userRepository.findOneOrFail({ where: { id: user.id } });
 	}
 
-	/**
-	 * Google OAuth login
-	 */
 	async googleLogin(profile: any) {
 		let user = await this.userRepository.findOne({
 			where: { googleId: profile.id },
@@ -147,20 +121,14 @@ export class AuthService {
 					isEmailConfirmed: true,
 					apiKey,
 					subscriptionPlan: SubscriptionPlan.FREE,
-					authProvider: AuthProvider.GOOGLE,
 				});
 			} else {
 				user.googleId = profile.id;
 				user.isEmailConfirmed = true;
-				user.authProvider = AuthProvider.GOOGLE;
 			}
 
 			await this.userRepository.save(user);
 		}
-
-		// Update last seen
-		user.lastSeenAt = new Date();
-		await this.userRepository.save(user);
 
 		const payload = { sub: user.id, email: user.email, role: user.role };
 		const accessToken = this.jwtService.sign(payload);
@@ -177,25 +145,24 @@ export class AuthService {
 		};
 	}
 
-	/**
-	 * Telegram Mini App authentication
-	 * Find or create user based on Telegram data
-	 */
-	async findOrCreateTelegramUser(telegramUser: TelegramUserDto): Promise<User> {
-		const telegramId = telegramUser.id.toString();
+	async telegramLogin(telegramData: any) {
+		const telegramId = telegramData.id.toString();
 
-		// Try to find existing user by Telegram ID
+		// Try to find user by telegram ID
 		let user = await this.userRepository.findOne({
 			where: { telegramId },
 		});
 
 		if (!user) {
-			// Generate username and email
-			const username = this.telegramService.generateUsername(telegramUser);
-			const email = this.telegramService.generateEmail(telegramUser);
+			// Create new user from Telegram data
 			const apiKey = uuidv4();
+			const username =
+				telegramData.username ||
+				`${telegramData.first_name}${telegramData.last_name || ""}`
+					.toLowerCase()
+					.replace(/\s+/g, "_");
 
-			// Check if username exists and make it unique if needed
+			// Generate a unique username if it already exists
 			let finalUsername = username;
 			let counter = 1;
 			while (
@@ -203,122 +170,52 @@ export class AuthService {
 					where: { username: finalUsername },
 				})
 			) {
-				finalUsername = `${username}${counter}`;
+				finalUsername = `${username}_${counter}`;
 				counter++;
 			}
 
-			// Create new user
 			user = this.userRepository.create({
-				email,
-				username: finalUsername,
 				telegramId,
-				telegramUsername: telegramUser.username || null,
-				telegramFirstName: telegramUser.first_name,
-				telegramLastName: telegramUser.last_name || null,
-				telegramPhotoUrl: telegramUser.photo_url || null,
-				isTelegramPremium: telegramUser.is_premium || false,
-				telegramLanguageCode: telegramUser.language_code || null,
-				isEmailConfirmed: true, // Auto-confirm for Telegram users
+				username: finalUsername,
+				isEmailConfirmed: true, // Telegram users are pre-verified
 				apiKey,
+				avatarUrl: telegramData.photo_url,
 				subscriptionPlan: SubscriptionPlan.FREE,
-				authProvider: AuthProvider.TELEGRAM,
-				avatarUrl: telegramUser.photo_url || null,
 			});
 
 			await this.userRepository.save(user);
-			console.log(`Created new Telegram user: ${user.id} (${telegramId})`);
 		} else {
-			// Update existing user's Telegram data
-			user.telegramUsername = telegramUser.username || user.telegramUsername;
-			user.telegramFirstName = telegramUser.first_name;
-			user.telegramLastName = telegramUser.last_name || null;
-			user.telegramPhotoUrl = telegramUser.photo_url || user.telegramPhotoUrl;
-			user.isTelegramPremium = telegramUser.is_premium || false;
-			user.telegramLanguageCode =
-				telegramUser.language_code || user.telegramLanguageCode;
-			user.lastSeenAt = new Date();
-
-			// Update avatar if Telegram photo exists and user doesn't have one
-			if (telegramUser.photo_url && !user.avatarUrl) {
-				user.avatarUrl = telegramUser.photo_url;
+			// Update avatar if changed
+			if (telegramData.photo_url && user.avatarUrl !== telegramData.photo_url) {
+				user.avatarUrl = telegramData.photo_url;
+				await this.userRepository.save(user);
 			}
-
-			await this.userRepository.save(user);
-			console.log(`Updated existing Telegram user: ${user.id} (${telegramId})`);
 		}
 
-		return user;
-	}
-
-	/**
-	 * Telegram Mini App authentication
-	 * Validates initData, finds or creates user, returns JWT token (same format as regular login)
-	 */
-	async telegramAuth(initData: string) {
-		const botToken = process.env.TELEGRAM_BOT_TOKEN;
-		if (!botToken) {
-			throw new Error("TELEGRAM_BOT_TOKEN is not configured");
-		}
-
-		// Validate and parse Telegram data
-		const parsedData = this.telegramService.validateTelegramRequest(
-			initData,
-			botToken,
-		);
-
-		// Extract user
-		const telegramUser = this.telegramService.extractUser(parsedData);
-		if (!telegramUser) {
-			throw new UnauthorizedException("User data not found");
-		}
-
-		// Find or create user
-		const user = await this.findOrCreateTelegramUser(telegramUser);
-
-		// Update last seen
-		user.lastSeenAt = new Date();
-		await this.userRepository.save(user);
-
-		// Generate JWT token (same as regular login)
 		const payload = { sub: user.id, email: user.email, role: user.role };
 		const accessToken = this.jwtService.sign(payload);
 
-		// Return same format as regular login
 		return {
 			accessToken,
 			apiKey: user.apiKey,
 			user: {
 				id: user.id,
-				email: user.email,
 				username: user.username,
+				email: user.email,
 				role: user.role,
 				subscriptionPlan: user.subscriptionPlan,
-				apiKey: user.apiKey,
-				authProvider: user.authProvider,
+				avatarUrl: user.avatarUrl,
 			},
 		};
 	}
 
-	/**
-	 * Validate API key (supports both traditional and Telegram users)
-	 */
 	async validateApiKey(apiKey: string): Promise<User | null> {
 		return this.userRepository.findOne({
 			where: { apiKey, isEmailConfirmed: true },
 		});
 	}
 
-	/**
-	 * Validate user by ID
-	 */
 	async validateUser(userId: string): Promise<User | null> {
 		return this.userRepository.findOne({ where: { id: userId } });
-	}
-
-	/**
-	 * Validate user by Telegram ID
-	 */
-	async validateTelegramUser(telegramId: string): Promise<User | null> {
-		return this.userRepository.findOne({ where: { telegramId } });
 	}
 }
