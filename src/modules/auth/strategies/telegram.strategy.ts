@@ -23,6 +23,9 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 	async validate(req: Request): Promise<TelegramAuthData> {
 		const { initData } = req.body;
 
+		console.log("=== Telegram Auth Debug ===");
+		console.log("Received initData:", initData);
+
 		if (!initData) {
 			throw new UnauthorizedException("Missing initData");
 		}
@@ -31,18 +34,24 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		const params = new URLSearchParams(initData);
 		const hash = params.get("hash");
 
+		console.log("Extracted hash:", hash);
+
 		if (!hash) {
 			throw new UnauthorizedException("Missing hash in initData");
 		}
 
 		// Verify Telegram data authenticity
 		const isValid = this.verifyTelegramAuth(initData, hash);
+		console.log("Verification result:", isValid);
+
 		if (!isValid) {
 			throw new UnauthorizedException("Invalid Telegram authentication");
 		}
 
 		// Extract and parse user data
 		const userDataStr = params.get("user");
+		console.log("User data string:", userDataStr);
+
 		if (!userDataStr) {
 			throw new UnauthorizedException("Missing user data");
 		}
@@ -50,6 +59,7 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		const userData = JSON.parse(
 			decodeURIComponent(userDataStr),
 		) as TelegramAuthData;
+		console.log("Parsed user data:", userData);
 
 		// Check if auth is not too old (24 hours)
 		const authDateStr = params.get("auth_date");
@@ -57,6 +67,9 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 			const authDate = new Date(parseInt(authDateStr) * 1000);
 			const now = new Date();
 			const hoursDiff = (now.getTime() - authDate.getTime()) / (1000 * 60 * 60);
+
+			console.log("Auth date:", authDate);
+			console.log("Hours old:", hoursDiff);
 
 			if (hoursDiff > 24) {
 				throw new UnauthorizedException("Telegram authentication expired");
@@ -68,6 +81,8 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 
 	private verifyTelegramAuth(initData: string, hash: string): boolean {
 		const botToken = process.env.TELEGRAM_BOT_TOKEN;
+
+		console.log("Bot token present:", !!botToken);
 
 		if (!botToken) {
 			throw new Error("TELEGRAM_BOT_TOKEN is not configured");
@@ -83,6 +98,8 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		const dataCheckArray: string[] = [];
 		const sortedKeys = Array.from(params.keys()).sort();
 
+		console.log("Sorted keys:", sortedKeys);
+
 		for (const key of sortedKeys) {
 			const value = params.get(key);
 			if (value) {
@@ -91,6 +108,7 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		}
 
 		const dataCheckString = dataCheckArray.join("\n");
+		console.log("Data check string:", dataCheckString);
 
 		// Create secret key from bot token
 		const secretKey = crypto.createHash("sha256").update(botToken).digest();
@@ -100,6 +118,10 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 			.createHmac("sha256", secretKey)
 			.update(dataCheckString)
 			.digest("hex");
+
+		console.log("Computed hash:", computedHash);
+		console.log("Received hash:", hash);
+		console.log("Hashes match:", computedHash === hash);
 
 		return computedHash === hash;
 	}
