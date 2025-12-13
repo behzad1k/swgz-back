@@ -3,7 +3,6 @@ import { PassportStrategy } from "@nestjs/passport";
 import { Strategy } from "passport-custom";
 import { Request } from "express";
 import * as crypto from "crypto";
-import { log } from "console";
 
 export interface TelegramAuthData {
 	id: number;
@@ -83,35 +82,31 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 	private verifyTelegramAuth(initData: string, hash: string): boolean {
 		const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
-		console.log("Bot token present:", botToken);
-
 		if (!botToken) {
 			throw new Error("TELEGRAM_BOT_TOKEN is not configured");
 		}
 
-		// Parse the initData
-		const params = new URLSearchParams(initData);
+		// Split initData into key=value pairs
+		const pairs = initData.split("&");
+		const dataCheck: { [key: string]: string } = {};
 
-		// Remove hash and signature from params for verification
-		// Telegram includes 'signature' but it's not part of the hash calculation
-		params.delete("hash");
-		params.delete("signature");
-
-		// Sort parameters alphabetically and create data-check-string
-		const dataCheckArray: string[] = [];
-		const sortedKeys = Array.from(params.keys()).sort();
-
-		console.log("Sorted keys:", sortedKeys);
-
-		for (const key of sortedKeys) {
-			const value = params.get(key);
-			if (value) {
-				dataCheckArray.push(`${key}=${value}`);
+		for (const pair of pairs) {
+			const [key, value] = pair.split("=");
+			if (key === "hash" || key === "signature") {
+				continue; // Skip hash and signature
 			}
+			dataCheck[key] = value; // Keep URL-encoded
 		}
 
+		// Sort keys and create data-check-string with URL-encoded values
+		const sortedKeys = Object.keys(dataCheck).sort();
+		const dataCheckArray = sortedKeys.map((key) => `${key}=${dataCheck[key]}`);
 		const dataCheckString = dataCheckArray.join("\n");
-		console.log("Data check string:", dataCheckString);
+
+		console.log(
+			"Data check string (first 200 chars):",
+			dataCheckString.substring(0, 200),
+		);
 
 		// Create secret key from bot token
 		const secretKey = crypto.createHash("sha256").update(botToken).digest();
