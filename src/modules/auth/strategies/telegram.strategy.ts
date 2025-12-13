@@ -95,15 +95,12 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 			.filter((pair) => !pair.startsWith("hash="));
 
 		// Step 2: Sort pairs alphabetically
-		pairs.sort();
+		// pairs.sort();
 
 		// Step 3: Join with newline
 		const dataCheckString = pairs.join("\n");
 
-		console.log(
-			"Data check string (first 300 chars):",
-			dataCheckString.substring(0, 300),
-		);
+		console.log("Data check string (first 300 chars):", dataCheckString);
 
 		// Step 4: Create secret key using HMAC-SHA256 with constant "WebAppData" and bot token
 		const secretKey = crypto
