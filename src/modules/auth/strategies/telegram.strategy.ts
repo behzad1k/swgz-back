@@ -86,32 +86,32 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 			throw new Error("TELEGRAM_BOT_TOKEN is not configured");
 		}
 
-		// Split initData into key=value pairs
-		const pairs = initData.split("&");
-		const dataCheck: { [key: string]: string } = {};
+		// For Mini Apps, we use a different validation method
+		// According to: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 
-		for (const pair of pairs) {
-			const [key, value] = pair.split("=");
-			if (key === "hash") {
-				continue; // Skip hash and signature
-			}
-			dataCheck[key] = value; // Keep URL-encoded
-		}
+		// Step 1: Extract all key=value pairs except hash
+		const pairs = initData
+			.split("&")
+			.filter((pair) => !pair.startsWith("hash="));
 
-		// Sort keys and create data-check-string with URL-encoded values
-		const sortedKeys = Object.keys(dataCheck).sort();
-		const dataCheckArray = sortedKeys.map((key) => `${key}=${dataCheck[key]}`);
-		const dataCheckString = dataCheckArray.join("\n");
+		// Step 2: Sort pairs alphabetically
+		pairs.sort();
+
+		// Step 3: Join with newline
+		const dataCheckString = pairs.join("\n");
 
 		console.log(
-			"Data check string (first 200 chars):",
-			dataCheckString.substring(0, 200),
+			"Data check string (first 300 chars):",
+			dataCheckString.substring(0, 300),
 		);
 
-		// Create secret key from bot token
-		const secretKey = crypto.createHash("sha256").update(botToken).digest();
+		// Step 4: Create secret key using HMAC-SHA256 with constant "WebAppData" and bot token
+		const secretKey = crypto
+			.createHmac("sha256", "WebAppData")
+			.update(botToken)
+			.digest();
 
-		// Create hash of data check string
+		// Step 5: Create hash of data check string using the secret key
 		const computedHash = crypto
 			.createHmac("sha256", secretKey)
 			.update(dataCheckString)
