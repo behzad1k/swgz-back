@@ -92,7 +92,7 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 
 		for (const pair of pairs) {
 			const [key, value] = pair.split("=");
-			if (key === "hash" || key === "signature") {
+			if (key === "hash") {
 				continue; // Skip hash and signature
 			}
 			dataCheck[key] = value; // Keep URL-encoded
