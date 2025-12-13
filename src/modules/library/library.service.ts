@@ -1,179 +1,182 @@
-
 // library.service.ts
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { FindOneOptions, Repository } from 'typeorm';
-import { LibrarySong } from './entities/library-song.entity';
-import { User, SubscriptionPlan } from '../users/entities/user.entity';
-import { MusicService } from '../music/music.service';
-import { Song } from '../music/entities/song.entity';
-import { Activity, ActivityType } from '../social/entities/social.entities';
-import { SwagzService, SwagzAction } from '../swagz/swagz.service';
-import { PlayHistory } from './entities/play-history.entity';
+import {
+	Injectable,
+	BadRequestException,
+	ForbiddenException,
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { FindOneOptions, Repository } from "typeorm";
+import { LibrarySong } from "./entities/library-song.entity";
+import { User, SubscriptionPlan } from "../users/entities/user.entity";
+import { MusicService } from "../music/music.service";
+import { Song } from "../music/entities/song.entity";
+import { Activity, ActivityType } from "../social/entities/social.entity";
+import { SwagzService, SwagzAction } from "../swagz/swagz.service";
+import { PlayHistory } from "./entities/play-history.entity";
 
 @Injectable()
 export class LibraryService {
-  constructor(
-    @InjectRepository(LibrarySong)
-    private librarySongRepository: Repository<LibrarySong>,
-    @InjectRepository(Song)
-    private songRepository: Repository<Song>,
-    @InjectRepository(Activity)
-    private activityRepository: Repository<Activity>,
-    @InjectRepository(PlayHistory)
-    private playHistoryRepository: Repository<PlayHistory>,
-    private musicService: MusicService,
-    private swagzService: SwagzService,
-  ) {}
+	constructor(
+		@InjectRepository(LibrarySong)
+		private librarySongRepository: Repository<LibrarySong>,
+		@InjectRepository(Song)
+		private songRepository: Repository<Song>,
+		@InjectRepository(Activity)
+		private activityRepository: Repository<Activity>,
+		@InjectRepository(PlayHistory)
+		private playHistoryRepository: Repository<PlayHistory>,
+		private musicService: MusicService,
+		private swagzService: SwagzService,
+	) {}
 
-  async addToLibrary(userId: string, songData: any, user: User) {
-    const count = await this.librarySongRepository.count({ where: { userId } });
+	async addToLibrary(userId: string, songData: any, user: User) {
+		const count = await this.librarySongRepository.count({ where: { userId } });
 
-    if (user.subscriptionPlan === SubscriptionPlan.FREE && count >= 100) {
-      throw new ForbiddenException('Free plan allows maximum 100 songs in library');
-    }
+		if (user.subscriptionPlan === SubscriptionPlan.FREE && count >= 100) {
+			throw new ForbiddenException(
+				"Free plan allows maximum 100 songs in library",
+			);
+		}
 
-    const options: FindOneOptions<Song> = {
-      where: { title: songData.title, artistName: songData.artistName },
-    }
+		const options: FindOneOptions<Song> = {
+			where: { title: songData.title, artistName: songData.artistName },
+		};
 
-    if (songData.id){
-      options.where['id'] = songData.id
-    }
-    const song = await this.musicService.getOrCreateSong(songData, options);
+		if (songData.id) {
+			options.where["id"] = songData.id;
+		}
+		const song = await this.musicService.getOrCreateSong(songData, options);
 
-    const existing = await this.librarySongRepository.findOne({
-      where: { userId, songId: song.id },
-    });
+		const existing = await this.librarySongRepository.findOne({
+			where: { userId, songId: song.id },
+		});
 
-    if (existing) {
-      throw new BadRequestException('Song already in library');
-    }
+		if (existing) {
+			throw new BadRequestException("Song already in library");
+		}
 
-    const librarySong = this.librarySongRepository.create({
-      userId,
-      songId: song.id,
-      isLiked: songData.isLiked || false,
-    });
+		const librarySong = this.librarySongRepository.create({
+			userId,
+			songId: song.id,
+			isLiked: songData.isLiked || false,
+		});
 
-    await this.librarySongRepository.save(librarySong);
+		await this.librarySongRepository.save(librarySong);
 
-    if (librarySong.isLiked) {
-      await this.songRepository.increment({ id: song.id }, 'likeCount', 1);
-      await this.activityRepository.save({
-        userId,
-        type: ActivityType.LIKE,
-        songId: song.id,
-      });
-      await this.swagzService.awardSwagz(userId, SwagzAction.LIKE);
-    }
+		if (librarySong.isLiked) {
+			await this.songRepository.increment({ id: song.id }, "likeCount", 1);
+			await this.activityRepository.save({
+				userId,
+				type: ActivityType.LIKE,
+				songId: song.id,
+			});
+			await this.swagzService.awardSwagz(userId, SwagzAction.LIKE);
+		}
 
-    return librarySong;
-  }
+		return librarySong;
+	}
 
-  async recordPlay(songId: string, user: User) {
-    await this.playHistoryRepository.save({
-      userId: user.id,
-      songId,
-    });
+	async recordPlay(songId: string, user: User) {
+		await this.playHistoryRepository.save({
+			userId: user.id,
+			songId,
+		});
 
-    await this.songRepository.increment({ id: songId }, 'playCount', 1);
+		await this.songRepository.increment({ id: songId }, "playCount", 1);
 
-    // Award swagz for streaming
-    await this.swagzService.awardSwagz(user.id, SwagzAction.STREAM);
-  }
+		// Award swagz for streaming
+		await this.swagzService.awardSwagz(user.id, SwagzAction.STREAM);
+	}
 
+	async removeFromLibrary(userId: string, songId: string) {
+		const librarySong = await this.librarySongRepository.findOne({
+			where: { userId, songId },
+		});
 
-  async removeFromLibrary(userId: string, songId: string) {
-    const librarySong = await this.librarySongRepository.findOne({
-      where: { userId, songId },
-    });
+		if (!librarySong) {
+			throw new BadRequestException("Song not found in library");
+		}
 
-    if (!librarySong) {
-      throw new BadRequestException('Song not found in library');
-    }
+		if (librarySong.isLiked) {
+			await this.songRepository.decrement({ id: songId }, "likeCount", 1);
+		}
 
-    if (librarySong.isLiked) {
-      await this.songRepository.decrement({ id: songId }, 'likeCount', 1);
-    }
+		await this.librarySongRepository.delete({ userId, songId });
+		return { message: "Song removed from library" };
+	}
 
-    await this.librarySongRepository.delete({ userId, songId });
-    return { message: 'Song removed from library' };
-  }
+	async getLibrary(userId: string) {
+		return this.librarySongRepository.find({
+			where: { userId },
+			relations: ["song"],
+			order: { addedAt: "DESC" },
+		});
+	}
 
-  async getLibrary(userId: string) {
-    return this.librarySongRepository.find({
-      where: { userId },
-      relations: ['song'],
-      order: { addedAt: 'DESC' },
-    });
-  }
+	async getLikedSongs(userId: string) {
+		return this.librarySongRepository.find({
+			where: { userId, isLiked: true },
+			relations: ["song"],
+			order: { addedAt: "DESC" },
+		});
+	}
 
-  async getLikedSongs(userId: string) {
-    return this.librarySongRepository.find({
-      where: { userId, isLiked: true },
-      relations: ['song'],
-      order: { addedAt: 'DESC' },
-    });
-  }
+	async getRecentlyPlayed(userId: string, limit: number = 20) {
+		return this.playHistoryRepository.find({
+			where: { userId },
+			relations: ["song"],
+			order: { playedAt: "DESC" },
+			take: limit,
+		});
+	}
 
-  async getRecentlyPlayed(userId: string, limit: number = 20) {
-    return this.playHistoryRepository.find({
-      where: { userId },
-      relations: ['song'],
-      order: { playedAt: 'DESC' },
-      take: limit,
-    });
-  }
+	async getMostListened(userId: string, limit: number = 20) {
+		const result = await this.playHistoryRepository
+			.createQueryBuilder("ph")
+			.select("ph.songId", "songId")
+			.addSelect("COUNT(*)", "playCount")
+			.where("ph.userId = :userId", { userId })
+			.groupBy("ph.songId")
+			.orderBy("playCount", "DESC")
+			.limit(limit)
+			.getRawMany();
 
-  async getMostListened(userId: string, limit: number = 20) {
-    const result = await this.playHistoryRepository
-    .createQueryBuilder('ph')
-    .select('ph.songId', 'songId')
-    .addSelect('COUNT(*)', 'playCount')
-    .where('ph.userId = :userId', { userId })
-    .groupBy('ph.songId')
-    .orderBy('playCount', 'DESC')
-    .limit(limit)
-    .getRawMany();
+		const songIds = result.map((r) => r.songId);
+		const songs = await this.songRepository.findByIds(songIds);
 
-    const songIds = result.map((r) => r.songId);
-    const songs = await this.songRepository.findByIds(songIds);
+		return result.map((r) => ({
+			song: songs.find((s) => s.id === r.songId),
+			playCount: parseInt(r.playCount),
+		}));
+	}
 
-    return result.map((r) => ({
-      song: songs.find((s) => s.id === r.songId),
-      playCount: parseInt(r.playCount),
-    }));
-  }
+	async toggleLike(userId: string, songId: string) {
+		let librarySong = await this.librarySongRepository.findOne({
+			where: { userId, songId },
+		});
 
-  async toggleLike(userId: string, songId: string) {
-    let librarySong = await this.librarySongRepository.findOne({
-      where: { userId, songId },
-    });
+		if (!librarySong) {
+			librarySong = new LibrarySong();
+			librarySong.songId = songId;
+			librarySong.userId = userId;
+			librarySong.addedAt = new Date();
+		}
 
-    if (!librarySong) {
-      librarySong = new LibrarySong();
-      librarySong.songId = songId;
-      librarySong.userId = userId;
-      librarySong.addedAt = new Date();
-    }
+		librarySong.isLiked = !librarySong.isLiked;
+		await this.librarySongRepository.save(librarySong);
 
+		if (librarySong.isLiked) {
+			await this.songRepository.increment({ id: songId }, "likeCount", 1);
+			await this.activityRepository.save({
+				userId,
+				type: ActivityType.LIKE,
+				songId,
+			});
+			await this.swagzService.awardSwagz(userId, SwagzAction.LIKE);
+		} else {
+			await this.songRepository.decrement({ id: songId }, "likeCount", 1);
+		}
 
-    librarySong.isLiked = !librarySong.isLiked;
-    await this.librarySongRepository.save(librarySong);
-
-    if (librarySong.isLiked) {
-      await this.songRepository.increment({ id: songId }, 'likeCount', 1);
-      // await this.activityRepository.save({
-      //   userId,
-      //   type: ActivityType.LIKE,
-      //   songId,
-      // });
-      // await this.swagzService.awardSwagz(userId, SwagzAction.LIKE);
-    } else {
-      await this.songRepository.decrement({ id: songId }, 'likeCount', 1);
-    }
-
-    return { isLiked: librarySong.isLiked, librarySong };
-  }
+		return { isLiked: librarySong.isLiked, librarySong };
+	}
 }

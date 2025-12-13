@@ -294,7 +294,7 @@ export class MusicService {
 		const refreshPromise = (async () => {
 			try {
 				console.log(
-					`🔄 Background refresh started for: "${query}" (filter: ${filter})`,
+					`Background refresh started for: "${query}" (filter: ${filter})`,
 				);
 				await this.performExternalSearch(query, filter, true);
 			} catch (error) {
