@@ -90,12 +90,9 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		// According to: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 
 		// Step 1: Extract all key=value pairs except hash
-		const pairs = initData
-			.split("&")
-			.filter((pair) => !pair.startsWith("hash="));
-
+		const pairs = initData.split("&");
 		// Step 2: Sort pairs alphabetically
-		// pairs.sort();
+		pairs.sort();
 
 		// Step 3: Join with newline
 		const dataCheckString = pairs.join("\n");
