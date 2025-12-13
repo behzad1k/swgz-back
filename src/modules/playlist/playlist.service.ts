@@ -6,7 +6,7 @@ import {
 	NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { FindOneOptions, Repository } from "typeorm";
 import { PlaylistSong } from "./entities/playlist-song.entity";
 import { Playlist, PlaylistSource } from "./entities/playlist.entity";
 import { User, SubscriptionPlan } from "../users/entities/user.entity";
@@ -79,7 +79,22 @@ export class PlaylistService {
 			throw new BadRequestException("Playlist is not editable");
 		}
 
-		const song = await this.musicService.getOrCreateSong(songData);
+		const whereFindOption: FindOneOptions = songData.id
+			? {
+					where: {
+						id: songData.id,
+					},
+				}
+			: {
+					where: {
+						title: songData.title,
+						artistName: songData.artistName,
+					},
+				};
+		const song = await this.musicService.getOrCreateSong(
+			songData,
+			whereFindOption,
+		);
 
 		// Check if song already exists in playlist
 		const existingSong = await this.playlistSongRepository.findOne({

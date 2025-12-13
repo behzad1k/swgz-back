@@ -39,14 +39,9 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		if (!hash) {
 			throw new UnauthorizedException("Missing hash in initData");
 		}
-		console.log(params.entries());
-		console.log(params.toString());
-		console.log(JSON.parse(params.toString()));
+
 		// Verify Telegram data authenticity
-		const isValid = this.verifyTelegramAuth(
-			JSON.parse(params.toString()),
-			hash,
-		);
+		const isValid = this.verifyTelegramAuth(initData, hash);
 		console.log("Verification result:", isValid);
 
 		if (!isValid) {
@@ -84,7 +79,7 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		return userData;
 	}
 
-	private verifyTelegramAuth(initData: any, hash: string): boolean {
+	private verifyTelegramAuth(initData: string, hash: string): boolean {
 		const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
 		if (!botToken) {
@@ -95,7 +90,10 @@ export class TelegramStrategy extends PassportStrategy(Strategy, "telegram") {
 		// According to: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 
 		// Step 1: Extract all key=value pairs except hash
-		const pairs = initData.split("&");
+		const pairs = initData
+			.split("&")
+			.filter((pair) => !pair.startsWith("hash="));
+
 		// Step 2: Sort pairs alphabetically
 		pairs.sort();
 
