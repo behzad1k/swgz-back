@@ -36,6 +36,7 @@ lerna-debug.log*
 # Downloads
 downloads/
 temp/
+uploads/*
 
 # Config
 sldl.conf
